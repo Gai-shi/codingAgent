@@ -4,12 +4,29 @@
 
 ## 第一版：终端聊天
 
-当前只实现最小聊天闭环：
+已实现最小聊天闭环：
 
 - 从环境变量读取认证与模型配置；
 - 非流式调用模型；
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
+
+## 第二版：原生 tool calling + read_file
+
+当前 CLI 已开始从 chat bot 向 coding agent 过渡：
+
+- 每次请求都会把 `read_file` 作为 Chat Completions 原生 tool 传给模型；
+- 如果模型返回 `tool_calls`，CLI 会在本地执行对应工具；
+- 工具结果用 `role=tool`、`tool_call_id=...`、`content=<普通字符串>` 回填到 `messages`；
+- CLI 会继续调用模型，直到模型返回普通 assistant 文本；
+- 第一版工具只支持读取当前工作区内的 UTF-8 文本文件；
+- 默认拒绝读取 `.env`、`.git/`、`__pycache__/` 等受保护路径。
+
+当前工具定义：
+
+```text
+read_file(path: string) -> string
+```
 
 ### 当前进度
 
@@ -20,8 +37,12 @@
 - 当前代码实际请求 `http://127.0.0.1:8787/v1/chat/completions`
 
 这里的 ModelHub 接入方式不是在项目内实现独立的 ModelHub provider，而是复用本机代理提供的
-OpenAI-compatible Chat Completions 接口。项目内部仍然只理解 `messages -> assistant text`
-这一层最小协议。
+OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Completions 的：
+
+- `messages`
+- `tools`
+- `assistant.tool_calls`
+- `role=tool` 工具结果消息
 
 ### 环境变量
 
@@ -37,7 +58,8 @@ export OPENAI_MODEL="你的模型名"
 ```bash
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export AI_JOB_TIMEOUT_SECONDS="60"
-export AI_JOB_SYSTEM_PROMPT="You are a helpful assistant."
+export AI_JOB_MAX_TOOL_ROUNDS="8"
+export AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
 ```
 
 如果使用本机 ModelHub 代理，可以改成：
