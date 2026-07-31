@@ -16,9 +16,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit"}
@@ -252,6 +253,38 @@ def print_context(messages: list[dict[str, Any]]) -> None:
     print()
 
 
+@contextmanager
+def suppress_stdin_echo_and_discard_input() -> Iterator[None]:
+    """Hide and discard user typing while the CLI is waiting for the model."""
+    try:
+        import termios
+    except ImportError:
+        yield
+        return
+
+    try:
+        stdin_fd = sys.stdin.fileno()
+        if not os.isatty(stdin_fd):
+            yield
+            return
+
+        old_attrs = termios.tcgetattr(stdin_fd)
+        new_attrs = old_attrs.copy()
+        new_attrs[3] &= ~termios.ECHO
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, new_attrs)
+    except (OSError, termios.error):
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        with suppress(OSError, termios.error):
+            termios.tcflush(stdin_fd, termios.TCIFLUSH)
+        with suppress(OSError, termios.error):
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
+
+
 def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]]) -> str:
     """Run one user turn, including zero or more native tool-calling rounds."""
     for _round_index in range(config.max_tool_rounds):
@@ -322,7 +355,12 @@ def main() -> int:
         turn_start = len(messages)
         messages.append({"role": "user", "content": user_text})
         try:
-            assistant_text = run_agent_turn(config, messages)
+            with suppress_stdin_echo_and_discard_input():
+                assistant_text = run_agent_turn(config, messages)
+        except KeyboardInterrupt:
+            del messages[turn_start:]
+            print("\n已中断。")
+            return 130
         except RuntimeError as exc:
             del messages[turn_start:]
             print(f"错误：{exc}", file=sys.stderr)
