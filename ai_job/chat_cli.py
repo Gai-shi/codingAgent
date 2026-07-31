@@ -6,13 +6,14 @@
 - 对话历史只保存在内存；
 - 使用 OpenAI-compatible Chat Completions 接口；
 - 使用原生 tool calling；
-- 第一版只提供 read_file 一个只读工具。
+- 提供 read_file 和 grep 两个只读工具。
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -20,7 +21,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit"}
@@ -30,8 +31,10 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need
 DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
+GREP_MAX_MATCHES = 50
+GREP_MAX_LINE_CHARS = 300
 DENIED_FILE_NAMES = {".env"}
-DENIED_PATH_PARTS = {".git", "__pycache__"}
+DENIED_PATH_PARTS = {".ai_job", ".git", ".venv", "__pycache__"}
 
 
 @dataclass(frozen=True)
@@ -138,7 +141,49 @@ READ_FILE_TOOL: dict[str, Any] = {
     },
 }
 
-AVAILABLE_TOOLS = [READ_FILE_TOOL]
+GREP_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "grep",
+        "description": (
+            "Search UTF-8 text files in the workspace using a Python regular expression. "
+            "Use this to locate relevant code before reading files."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Python regular expression pattern to search for.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Optional directory path under the workspace root. "
+                        "Defaults to the workspace root."
+                    ),
+                },
+                "type": {
+                    "type": "string",
+                    "description": (
+                        "Optional file extension filter without the dot, such as py, md."
+                    ),
+                },
+                "is_root": {
+                    "type": "boolean",
+                    "description": (
+                        "Whether to search hidden/protected directories. "
+                        "Only use true after explicit user approval. Defaults to false."
+                    ),
+                },
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+AVAILABLE_TOOLS = [READ_FILE_TOOL, GREP_TOOL]
 
 
 def resolve_workspace_file(path_text: str) -> Path:
@@ -167,6 +212,51 @@ def resolve_workspace_file(path_text: str) -> Path:
     return resolved
 
 
+def resolve_workspace_directory(path_text: str) -> Path:
+    """Resolve a path as a directory under WORKSPACE_ROOT."""
+    raw_path = Path(path_text or ".").expanduser()
+    candidate = raw_path if raw_path.is_absolute() else WORKSPACE_ROOT / raw_path
+    resolved = candidate.resolve()
+
+    try:
+        resolved.relative_to(WORKSPACE_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"path escapes workspace: {path_text}") from exc
+
+    if not resolved.exists():
+        raise FileNotFoundError(f"directory not found: {path_text}")
+    if not resolved.is_dir():
+        raise ValueError(f"not a directory: {path_text}")
+
+    return resolved
+
+
+def has_hidden_or_protected_dir(path: Path) -> bool:
+    relative_parts = path.resolve().relative_to(WORKSPACE_ROOT).parts
+    return any(part.startswith(".") or part in DENIED_PATH_PARTS for part in relative_parts)
+
+
+def should_skip_directory(path: Path, allow_hidden_or_protected: bool) -> bool:
+    if allow_hidden_or_protected:
+        return False
+    return path.name.startswith(".") or path.name in DENIED_PATH_PARTS
+
+
+def normalize_file_type(type_value: Any) -> Optional[str]:
+    if type_value is None:
+        return None
+    if not isinstance(type_value, str):
+        raise ValueError('invalid arguments: "type" must be a string')
+
+    normalized = type_value.strip().lstrip(".")
+    if not normalized:
+        return None
+    if any(separator in normalized for separator in ("/", "\\")) or "*" in normalized:
+        raise ValueError('invalid arguments: "type" must be a simple file extension, such as py')
+
+    return normalized
+
+
 def read_file_tool(arguments: dict[str, Any]) -> str:
     path_value = arguments.get("path")
     if not isinstance(path_value, str):
@@ -177,6 +267,88 @@ def read_file_tool(arguments: dict[str, Any]) -> str:
         return file_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"file is not valid UTF-8 text: {path_value}") from exc
+
+
+def request_root_grep_approval(path: Path) -> bool:
+    relative_path = path.relative_to(WORKSPACE_ROOT) if path != WORKSPACE_ROOT else Path(".")
+    print()
+    print("grep 请求检索隐藏目录或保护目录。")
+    print(f"范围：{relative_path}")
+    answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
+    return answer == "yes"
+
+
+def grep_tool(arguments: dict[str, Any]) -> str:
+    pattern_value = arguments.get("pattern")
+    if not isinstance(pattern_value, str) or not pattern_value:
+        raise ValueError('invalid arguments: "pattern" must be a non-empty string')
+
+    path_value = arguments.get("path", ".")
+    if not isinstance(path_value, str):
+        raise ValueError('invalid arguments: "path" must be a string')
+
+    is_root_value = arguments.get("is_root", False)
+    if not isinstance(is_root_value, bool):
+        raise ValueError('invalid arguments: "is_root" must be a boolean')
+
+    type_filter = normalize_file_type(arguments.get("type"))
+
+    try:
+        regex = re.compile(pattern_value)
+    except re.error as exc:
+        raise ValueError(f"invalid regex pattern: {exc}") from exc
+
+    search_root = resolve_workspace_directory(path_value)
+    if has_hidden_or_protected_dir(search_root) and not is_root_value:
+        raise PermissionError(f"refusing to search hidden/protected directory without is_root=true: {path_value}")
+    if is_root_value and not request_root_grep_approval(search_root):
+        raise PermissionError("user rejected grep is_root=true")
+
+    matches: list[str] = []
+    for current_dir, dir_names, file_names in os.walk(search_root):
+        current_path = Path(current_dir)
+        dir_names[:] = [
+            name
+            for name in sorted(dir_names)
+            if not should_skip_directory(current_path / name, is_root_value)
+        ]
+
+        for file_name in sorted(file_names):
+            file_path = current_path / file_name
+            if file_path.name in DENIED_FILE_NAMES and not is_root_value:
+                continue
+            if type_filter and file_path.suffix.lstrip(".") != type_filter:
+                continue
+
+            try:
+                resolved_file = file_path.resolve()
+                resolved_file.relative_to(WORKSPACE_ROOT)
+            except (OSError, ValueError):
+                continue
+            if not resolved_file.is_file():
+                continue
+
+            try:
+                with resolved_file.open("r", encoding="utf-8") as source_file:
+                    for line_number, line in enumerate(source_file, start=1):
+                        line_text = line.rstrip("\r\n")
+                        if not regex.search(line_text):
+                            continue
+
+                        if len(line_text) > GREP_MAX_LINE_CHARS:
+                            line_text = line_text[:GREP_MAX_LINE_CHARS] + "..."
+
+                        relative_file = resolved_file.relative_to(WORKSPACE_ROOT)
+                        matches.append(f"{relative_file}:{line_number}:{line_text}")
+                        if len(matches) >= GREP_MAX_MATCHES:
+                            matches.append(f"... truncated at {GREP_MAX_MATCHES} matches")
+                            return "\n".join(matches)
+            except (OSError, UnicodeDecodeError):
+                continue
+
+    if not matches:
+        return "No matches."
+    return "\n".join(matches)
 
 
 def execute_tool_call(tool_call: dict[str, Any]) -> str:
@@ -200,6 +372,8 @@ def execute_tool_call(tool_call: dict[str, Any]) -> str:
     try:
         if tool_name == "read_file":
             return read_file_tool(arguments)
+        if tool_name == "grep":
+            return grep_tool(arguments)
         return f"Error: unknown tool: {tool_name}"
     except Exception as exc:  # noqa: BLE001 - convert tool failures into LLM-readable text.
         return f"Error: {exc}"
@@ -289,7 +463,7 @@ def print_banner(config: LLMConfig, trace_logger: TraceLogger) -> None:
     print(f"base_url: {config.base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
     print(f"trace_log: {trace_logger.log_path}")
-    print("tools: read_file")
+    print("tools: read_file, grep")
     print("输入 /context 查看当前内存里的 messages。")
     print("输入 exit / quit / Ctrl-D 退出。")
     print()
@@ -339,7 +513,8 @@ def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]], trace_logg
         round_number = round_index + 1
         trace_logger.write_round(round_number)
 
-        assistant_message = call_llm(config, messages)
+        with suppress_stdin_echo_and_discard_input():
+            assistant_message = call_llm(config, messages)
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -409,8 +584,7 @@ def main() -> int:
         turn_start = len(messages)
         messages.append({"role": "user", "content": user_text})
         try:
-            with suppress_stdin_echo_and_discard_input():
-                assistant_text = run_agent_turn(config, messages, trace_logger)
+            assistant_text = run_agent_turn(config, messages, trace_logger)
         except KeyboardInterrupt:
             del messages[turn_start:]
             print("\n已中断。")

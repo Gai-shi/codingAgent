@@ -11,16 +11,16 @@
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
 
-## 第二版：原生 tool calling + read_file
+## 第二版：原生 tool calling + 只读工具
 
 当前 CLI 已开始从 chat bot 向 coding agent 过渡：
 
-- 每次请求都会把 `read_file` 作为 Chat Completions 原生 tool 传给模型；
+- 每次请求都会把 `read_file` 和 `grep` 作为 Chat Completions 原生 tool 传给模型；
 - 如果模型返回 `tool_calls`，CLI 会在本地执行对应工具；
 - 工具结果用 `role=tool`、`tool_call_id=...`、`content=<普通字符串>` 回填到 `messages`；
 - CLI 会继续调用模型，直到模型返回普通 assistant 文本；
-- 第一版工具只支持读取当前工作区内的 UTF-8 文本文件；
-- 默认拒绝读取 `.env`、`.git/`、`__pycache__/` 等受保护路径。
+- 当前工具只支持读取或检索当前工作区内的 UTF-8 文本文件；
+- 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 等待模型返回期间会关闭终端输入回显，并丢弃这段时间内误输入的内容，避免用户输入和模型输出重叠。
 - 每轮 agent loop 都会写入 Debug Trace 日志；`DebugMode` 默认按 `true` 处理，会同步把 trace 打印到终端。
 
@@ -28,7 +28,16 @@
 
 ```text
 read_file(path: string) -> string
+grep(pattern: string, path?: string, type?: string, is_root?: boolean) -> string
 ```
+
+`grep` 使用 Python 正则表达式搜索文本文件：
+
+- `pattern`：必填，正则表达式；
+- `path`：可选，限定工作区内的子目录，默认工作区根目录；
+- `type`：可选，按文件扩展名过滤，例如 `py`、`kt`、`md`；
+- `is_root`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
+- 输出最多返回 50 条匹配，每条格式为 `relative_path:line_number:line_text`。
 
 ### Debug Trace
 
