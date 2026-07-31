@@ -22,11 +22,33 @@
 - 第一版工具只支持读取当前工作区内的 UTF-8 文本文件；
 - 默认拒绝读取 `.env`、`.git/`、`__pycache__/` 等受保护路径。
 - 等待模型返回期间会关闭终端输入回显，并丢弃这段时间内误输入的内容，避免用户输入和模型输出重叠。
+- 每轮 agent loop 都会写入 Debug Trace 日志；当 `DebugMode=true` 时，同步把 trace 打印到终端。
 
 当前工具定义：
 
 ```text
 read_file(path: string) -> string
+```
+
+### Debug Trace
+
+Trace 默认写入：
+
+```text
+.ai_job/trace.log
+```
+
+当前只记录两类最小事件：
+
+```text
+round=<轮次>
+round=<轮次> tool=<工具名>
+```
+
+无论是否开启 DebugMode，trace 都会写入日志文件。如果希望同时打印到终端：
+
+```bash
+export DebugMode=true
 ```
 
 ### 当前进度
@@ -61,6 +83,7 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 export AI_JOB_TIMEOUT_SECONDS="60"
 export AI_JOB_MAX_TOOL_ROUNDS="8"
 export AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
+export DebugMode="true"
 ```
 
 如果使用本机 ModelHub 代理，可以改成：

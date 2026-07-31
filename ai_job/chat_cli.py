@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -28,6 +29,7 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need workspace information."
 DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
 DENIED_FILE_NAMES = {".env"}
 DENIED_PATH_PARTS = {".git", "__pycache__"}
 
@@ -79,6 +81,39 @@ class LLMConfig:
             timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds,
         )
+
+
+@dataclass(frozen=True)
+class TraceLogger:
+    log_path: Path
+    print_to_terminal: bool
+
+    @classmethod
+    def from_env(cls) -> "TraceLogger":
+        return cls(
+            log_path=DEFAULT_TRACE_LOG_PATH,
+            print_to_terminal=os.getenv("DebugMode", "").strip().lower() == "true",
+        )
+
+    def write_round(self, round_number: int) -> None:
+        self._write(f"round={round_number}")
+
+    def write_tool(self, round_number: int, tool_name: str) -> None:
+        self._write(f"round={round_number} tool={tool_name}")
+
+    def _write(self, event_text: str) -> None:
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        line = f"{timestamp} {event_text}"
+
+        try:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(line + "\n")
+        except OSError as exc:
+            raise RuntimeError(f"Trace 写入失败：{self.log_path}：{exc}") from exc
+
+        if self.print_to_terminal:
+            print(f"[trace] {line}", file=sys.stderr)
 
 
 READ_FILE_TOOL: dict[str, Any] = {
@@ -170,6 +205,18 @@ def execute_tool_call(tool_call: dict[str, Any]) -> str:
         return f"Error: {exc}"
 
 
+def get_tool_call_name(tool_call: dict[str, Any]) -> str:
+    function_call = tool_call.get("function")
+    if not isinstance(function_call, dict):
+        return "<malformed>"
+
+    tool_name = function_call.get("name")
+    if not isinstance(tool_name, str) or not tool_name:
+        return "<malformed>"
+
+    return tool_name
+
+
 def call_llm(config: LLMConfig, messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Call one non-streaming chat completion and return the assistant message."""
     url = f"{config.base_url}/chat/completions"
@@ -236,11 +283,12 @@ def build_initial_messages() -> list[dict[str, Any]]:
     return [{"role": "system", "content": system_prompt}]
 
 
-def print_banner(config: LLMConfig) -> None:
+def print_banner(config: LLMConfig, trace_logger: TraceLogger) -> None:
     print("ai-job 最小 coding agent CLI")
     print(f"model: {config.model}")
     print(f"base_url: {config.base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
+    print(f"trace_log: {trace_logger.log_path}")
     print("tools: read_file")
     print("输入 /context 查看当前内存里的 messages。")
     print("输入 exit / quit / Ctrl-D 退出。")
@@ -285,9 +333,12 @@ def suppress_stdin_echo_and_discard_input() -> Iterator[None]:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
 
 
-def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]]) -> str:
+def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]], trace_logger: TraceLogger) -> str:
     """Run one user turn, including zero or more native tool-calling rounds."""
-    for _round_index in range(config.max_tool_rounds):
+    for round_index in range(config.max_tool_rounds):
+        round_number = round_index + 1
+        trace_logger.write_round(round_number)
+
         assistant_message = call_llm(config, messages)
         messages.append(assistant_message)
 
@@ -301,6 +352,8 @@ def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]]) -> str:
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 raise RuntimeError("LLM 响应 tool_calls[] 格式异常")
+            trace_logger.write_tool(round_number, get_tool_call_name(tool_call))
+
             tool_call_id = tool_call.get("id")
             if not isinstance(tool_call_id, str):
                 raise RuntimeError("LLM 响应 tool_call 缺少 id")
@@ -329,7 +382,8 @@ def main() -> int:
         return 2
 
     messages = build_initial_messages()
-    print_banner(config)
+    trace_logger = TraceLogger.from_env()
+    print_banner(config, trace_logger)
 
     while True:
         try:
@@ -356,7 +410,7 @@ def main() -> int:
         messages.append({"role": "user", "content": user_text})
         try:
             with suppress_stdin_echo_and_discard_input():
-                assistant_text = run_agent_turn(config, messages)
+                assistant_text = run_agent_turn(config, messages, trace_logger)
         except KeyboardInterrupt:
             del messages[turn_start:]
             print("\n已中断。")
