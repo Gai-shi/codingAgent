@@ -21,22 +21,22 @@
 - CLI 会继续调用模型，直到模型返回普通 assistant 文本；
 - 当前工具只支持读取或检索当前工作区内的 UTF-8 文本文件；
 - 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
-- 等待模型返回期间会关闭终端输入回显，并丢弃这段时间内误输入的内容，避免用户输入和模型输出重叠。
+- 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入 Debug Trace 日志；`DebugMode` 默认按 `true` 处理，会同步把 trace 打印到终端。
 
 当前工具定义：
 
 ```text
 read_file(path: string) -> string
-grep(pattern: string, path?: string, type?: string, is_root?: boolean) -> string
+grep(pattern: string, path?: string, type?: string, include_protected?: boolean) -> string
 ```
 
 `grep` 使用 Python 正则表达式搜索文本文件：
 
 - `pattern`：必填，正则表达式；
 - `path`：可选，限定工作区内的子目录，默认工作区根目录；
-- `type`：可选，按文件扩展名过滤，例如 `py`、`kt`、`md`；
-- `is_root`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
+- `type`：可选，按文件扩展名过滤，例如 `py`、`kt`、`md`；默认空字符串，表示搜索所有 UTF-8 文本文件；
+- `include_protected`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
 - 输出最多返回 50 条匹配，每条格式为 `relative_path:line_number:line_text`。
 
 ### Debug Trace

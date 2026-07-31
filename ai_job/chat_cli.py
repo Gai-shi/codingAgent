@@ -165,12 +165,15 @@ GREP_TOOL: dict[str, Any] = {
                 },
                 "type": {
                     "type": "string",
+                    "default": "",
                     "description": (
-                        "Optional file extension filter without the dot, such as py, md."
+                        "Optional file extension filter without the dot, such as py, md. "
+                        "Defaults to an empty string, which means searching all UTF-8 text files."
                     ),
                 },
-                "is_root": {
+                "include_protected": {
                     "type": "boolean",
+                    "default": False,
                     "description": (
                         "Whether to search hidden/protected directories. "
                         "Only use true after explicit user approval. Defaults to false."
@@ -269,12 +272,43 @@ def read_file_tool(arguments: dict[str, Any]) -> str:
         raise ValueError(f"file is not valid UTF-8 text: {path_value}") from exc
 
 
-def request_root_grep_approval(path: Path) -> bool:
+@contextmanager
+def allow_stdin_echo_for_input() -> Iterator[None]:
+    """Temporarily allow visible terminal input inside a suppressed-input turn."""
+    try:
+        import termios
+    except ImportError:
+        yield
+        return
+
+    try:
+        stdin_fd = sys.stdin.fileno()
+        if not os.isatty(stdin_fd):
+            yield
+            return
+
+        old_attrs = termios.tcgetattr(stdin_fd)
+        new_attrs = old_attrs.copy()
+        new_attrs[3] |= termios.ECHO
+        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, new_attrs)
+    except (OSError, termios.error):
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        with suppress(OSError, termios.error):
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
+
+
+def request_protected_grep_approval(path: Path) -> bool:
     relative_path = path.relative_to(WORKSPACE_ROOT) if path != WORKSPACE_ROOT else Path(".")
     print()
     print("grep 请求检索隐藏目录或保护目录。")
     print(f"范围：{relative_path}")
-    answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
+    with allow_stdin_echo_for_input():
+        answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
     return answer == "yes"
 
 
@@ -287,9 +321,9 @@ def grep_tool(arguments: dict[str, Any]) -> str:
     if not isinstance(path_value, str):
         raise ValueError('invalid arguments: "path" must be a string')
 
-    is_root_value = arguments.get("is_root", False)
-    if not isinstance(is_root_value, bool):
-        raise ValueError('invalid arguments: "is_root" must be a boolean')
+    include_protected = arguments.get("include_protected", False)
+    if not isinstance(include_protected, bool):
+        raise ValueError('invalid arguments: "include_protected" must be a boolean')
 
     type_filter = normalize_file_type(arguments.get("type"))
 
@@ -299,10 +333,12 @@ def grep_tool(arguments: dict[str, Any]) -> str:
         raise ValueError(f"invalid regex pattern: {exc}") from exc
 
     search_root = resolve_workspace_directory(path_value)
-    if has_hidden_or_protected_dir(search_root) and not is_root_value:
-        raise PermissionError(f"refusing to search hidden/protected directory without is_root=true: {path_value}")
-    if is_root_value and not request_root_grep_approval(search_root):
-        raise PermissionError("user rejected grep is_root=true")
+    if has_hidden_or_protected_dir(search_root) and not include_protected:
+        raise PermissionError(
+            f"refusing to search hidden/protected directory without include_protected=true: {path_value}"
+        )
+    if include_protected and not request_protected_grep_approval(search_root):
+        raise PermissionError("user rejected grep include_protected=true")
 
     matches: list[str] = []
     for current_dir, dir_names, file_names in os.walk(search_root):
@@ -310,12 +346,12 @@ def grep_tool(arguments: dict[str, Any]) -> str:
         dir_names[:] = [
             name
             for name in sorted(dir_names)
-            if not should_skip_directory(current_path / name, is_root_value)
+            if not should_skip_directory(current_path / name, include_protected)
         ]
 
         for file_name in sorted(file_names):
             file_path = current_path / file_name
-            if file_path.name in DENIED_FILE_NAMES and not is_root_value:
+            if file_path.name in DENIED_FILE_NAMES and not include_protected:
                 continue
             if type_filter and file_path.suffix.lstrip(".") != type_filter:
                 continue
@@ -477,7 +513,7 @@ def print_context(messages: list[dict[str, Any]]) -> None:
 
 @contextmanager
 def suppress_stdin_echo_and_discard_input() -> Iterator[None]:
-    """Hide and discard user typing while the CLI is waiting for the model."""
+    """Hide and discard user typing while the CLI is busy."""
     try:
         import termios
     except ImportError:
@@ -513,8 +549,7 @@ def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]], trace_logg
         round_number = round_index + 1
         trace_logger.write_round(round_number)
 
-        with suppress_stdin_echo_and_discard_input():
-            assistant_message = call_llm(config, messages)
+        assistant_message = call_llm(config, messages)
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -584,7 +619,8 @@ def main() -> int:
         turn_start = len(messages)
         messages.append({"role": "user", "content": user_text})
         try:
-            assistant_text = run_agent_turn(config, messages, trace_logger)
+            with suppress_stdin_echo_and_discard_input():
+                assistant_text = run_agent_turn(config, messages, trace_logger)
         except KeyboardInterrupt:
             del messages[turn_start:]
             print("\n已中断。")
