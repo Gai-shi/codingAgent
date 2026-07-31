@@ -92,7 +92,7 @@ class TraceLogger:
     def from_env(cls) -> "TraceLogger":
         return cls(
             log_path=DEFAULT_TRACE_LOG_PATH,
-            print_to_terminal=os.getenv("DebugMode", "").strip().lower() == "true",
+            print_to_terminal=os.getenv("DebugMode", "true").strip().lower() == "true",
         )
 
     def write_round(self, round_number: int) -> None:
