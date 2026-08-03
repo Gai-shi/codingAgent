@@ -1,7 +1,7 @@
 """A minimal terminal coding-agent loop with native tool calling.
 
 当前文件实现你已经拍板的边界：
-- 只读环境变量；
+- 从项目级 .env 和环境变量读取配置；
 - 非流式输出；
 - 对话历史只保存在内存；
 - 使用 OpenAI-compatible Chat Completions 接口；
@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
+from .env_file_loader import load_env_file
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
@@ -33,6 +34,7 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need workspace information."
 DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
 
 
@@ -276,11 +278,12 @@ def run_agent_turn(
 
 def main() -> int:
     try:
+        load_env_file(DEFAULT_ENV_FILE_PATH)
         config = LLMConfig.from_env()
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
-            "示例：OPENAI_API_KEY=xxx OPENAI_MODEL=xxx python3 -m ai_job.chat_cli",
+            "示例：OPENAI_API_KEY=xxx OPENAI_MODEL=xxx python3 -m ai_job",
             file=sys.stderr,
         )
         return 2

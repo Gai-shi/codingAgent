@@ -6,7 +6,7 @@
 
 已实现最小聊天闭环：
 
-- 从环境变量读取认证与模型配置；
+- 从项目级 `.env` 和环境变量读取认证与模型配置；
 - 非流式调用模型；
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
@@ -84,31 +84,29 @@ OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Com
 
 ### 环境变量
 
-必填：
+启动时会自动读取项目根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
+
+`.env` 示例：
 
 ```bash
-export OPENAI_API_KEY="你的 API Key"
-export OPENAI_MODEL="你的模型名"
+OPENAI_API_KEY="你的 API Key"
+OPENAI_MODEL="你的模型名"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+AI_JOB_TIMEOUT_SECONDS="60"
+AI_JOB_MAX_TOOL_ROUNDS="8"
+AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
+DebugMode="false"
 ```
 
-可选：
+如果使用本机 ModelHub 代理，可以把 `.env` 改成：
 
 ```bash
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export AI_JOB_TIMEOUT_SECONDS="60"
-export AI_JOB_MAX_TOOL_ROUNDS="8"
-export AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
-export DebugMode="false"
+OPENAI_API_KEY="任意非空占位值"
+OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
+OPENAI_MODEL="gpt-5.5"
 ```
 
-如果使用本机 ModelHub 代理，可以改成：
-
-```bash
-export OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
-export OPENAI_MODEL="gpt-5.5"
-```
-
-注意：`OPENAI_API_KEY` 仍然需要设置，因为当前 CLI 会在启动时校验它存在；不要把真实密钥写入代码或提交到仓库。
+当前 `.env` loader 支持空行、`#` 注释行、`KEY=VALUE`、`export KEY=VALUE`，以及单引号/双引号包裹的值。`.env` 已被 `.gitignore` 忽略；不要把真实密钥写入代码或提交到仓库。
 
 ### 启动
 
