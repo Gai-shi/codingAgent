@@ -26,6 +26,7 @@
 - 工具调用已拆出内部契约：`ToolCall`、`ToolResult`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；
 - OpenAI Chat Completions 的原始 `tool_call` 格式只在 OpenAI adapter 中解析，工具执行层只处理内部 `ToolCall`。
 - 工具实现已独立到 `ai_job/tools/` 包中，`chat_cli.py` 只负责 CLI 主循环和 agent turn 编排。
+- 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 
 当前工具定义：
 

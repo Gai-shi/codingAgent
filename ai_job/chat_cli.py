@@ -17,11 +17,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .openai_tool_adapter import (
     get_openai_tool_call_name,
@@ -29,6 +28,7 @@ from .openai_tool_adapter import (
     render_openai_tool_result,
     render_openai_tool_result_message,
 )
+from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
 
@@ -123,42 +123,12 @@ class TraceLogger:
             print(f"[trace] {line}", file=sys.stderr)
 
 
-@contextmanager
-def allow_stdin_echo_for_input() -> Iterator[None]:
-    """Temporarily allow visible terminal input inside a suppressed-input turn."""
-    try:
-        import termios
-    except ImportError:
-        yield
-        return
-
-    try:
-        stdin_fd = sys.stdin.fileno()
-        if not os.isatty(stdin_fd):
-            yield
-            return
-
-        old_attrs = termios.tcgetattr(stdin_fd)
-        new_attrs = old_attrs.copy()
-        new_attrs[3] |= termios.ECHO
-        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, new_attrs)
-    except (OSError, termios.error):
-        yield
-        return
-
-    try:
-        yield
-    finally:
-        with suppress(OSError, termios.error):
-            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
-
-
 def request_protected_grep_approval(path: Path) -> bool:
     relative_path = path.relative_to(WORKSPACE_ROOT) if path != WORKSPACE_ROOT else Path(".")
     print()
     print("grep 请求检索隐藏目录或保护目录。")
     print(f"范围：{relative_path}")
-    with allow_stdin_echo_for_input():
+    with AllowInputEcho():
         answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
     return answer == "yes"
 
@@ -251,38 +221,6 @@ def print_context(messages: list[dict[str, Any]]) -> None:
     print()
 
 
-@contextmanager
-def suppress_stdin_echo_and_discard_input() -> Iterator[None]:
-    """Hide and discard user typing while the CLI is busy."""
-    try:
-        import termios
-    except ImportError:
-        yield
-        return
-
-    try:
-        stdin_fd = sys.stdin.fileno()
-        if not os.isatty(stdin_fd):
-            yield
-            return
-
-        old_attrs = termios.tcgetattr(stdin_fd)
-        new_attrs = old_attrs.copy()
-        new_attrs[3] &= ~termios.ECHO
-        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, new_attrs)
-    except (OSError, termios.error):
-        yield
-        return
-
-    try:
-        yield
-    finally:
-        with suppress(OSError, termios.error):
-            termios.tcflush(stdin_fd, termios.TCIFLUSH)
-        with suppress(OSError, termios.error):
-            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
-
-
 def run_agent_turn(
     config: LLMConfig,
     messages: list[dict[str, Any]],
@@ -372,7 +310,7 @@ def main() -> int:
         turn_start = len(messages)
         messages.append({"role": "user", "content": user_text})
         try:
-            with suppress_stdin_echo_and_discard_input():
+            with SuppressInputEchoAndDiscard():
                 assistant_text = run_agent_turn(
                     config,
                     messages,
