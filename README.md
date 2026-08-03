@@ -23,6 +23,8 @@
 - 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入 Debug Trace 日志；`DebugMode` 默认按 `true` 处理，会同步把 trace 打印到终端。
+- 工具调用已拆出内部契约：`ToolCall`、`ToolResult`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；
+- OpenAI Chat Completions 的原始 `tool_call` 格式只在 OpenAI adapter 中解析，工具执行层只处理内部 `ToolCall`。
 
 当前工具定义：
 

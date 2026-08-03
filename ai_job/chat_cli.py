@@ -1,4 +1,4 @@
-"""A minimal terminal coding-agent loop with one native tool.
+"""A minimal terminal coding-agent loop with native tool calling.
 
 当前文件实现你已经拍板的边界：
 - 只读环境变量；
@@ -6,6 +6,7 @@
 - 对话历史只保存在内存；
 - 使用 OpenAI-compatible Chat Completions 接口；
 - 使用原生 tool calling；
+- 通过 ToolCall / ToolResult / BaseTool / ToolRegistry / ToolExecutor 管理工具；
 - 提供 read_file 和 grep 两个只读工具。
 """
 
@@ -22,6 +23,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Optional
+
+from .openai_tool_adapter import (
+    get_openai_tool_call_name,
+    parse_openai_tool_call,
+    render_openai_tool_result,
+    render_openai_tool_result_message,
+)
+from .tool_contract import BaseTool, ToolExecutor, ToolRegistry, ToolResult
 
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit"}
@@ -119,74 +128,60 @@ class TraceLogger:
             print(f"[trace] {line}", file=sys.stderr)
 
 
-READ_FILE_TOOL: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "read_file",
-        "description": (
-            "Read a UTF-8 text file inside the current workspace. "
-            "Use this when you need to inspect project files before answering."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file, relative to the workspace root.",
-                }
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
+READ_FILE_DESCRIPTION = (
+    "Read a UTF-8 text file inside the current workspace. "
+    "Use this when you need to inspect project files before answering."
+)
+READ_FILE_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Path to the file, relative to the workspace root.",
+        }
     },
+    "required": ["path"],
+    "additionalProperties": False,
 }
 
-GREP_TOOL: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "grep",
-        "description": (
-            "Search UTF-8 text files in the workspace using a Python regular expression. "
-            "Use this to locate relevant code before reading files."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Python regular expression pattern to search for.",
-                },
-                "path": {
-                    "type": "string",
-                    "description": (
-                        "Optional directory path under the workspace root. "
-                        "Defaults to the workspace root."
-                    ),
-                },
-                "type": {
-                    "type": "string",
-                    "default": "",
-                    "description": (
-                        "Optional file extension filter without the dot, such as py, md. "
-                        "Defaults to an empty string, which means searching all UTF-8 text files."
-                    ),
-                },
-                "include_protected": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": (
-                        "Whether to search hidden/protected directories. "
-                        "Only use true after explicit user approval. Defaults to false."
-                    ),
-                },
-            },
-            "required": ["pattern"],
-            "additionalProperties": False,
+GREP_DESCRIPTION = (
+    "Search UTF-8 text files in the workspace using a Python regular expression. "
+    "Use this to locate relevant code before reading files."
+)
+GREP_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "pattern": {
+            "type": "string",
+            "description": "Python regular expression pattern to search for.",
+        },
+        "path": {
+            "type": "string",
+            "description": (
+                "Optional directory path under the workspace root. "
+                "Defaults to the workspace root."
+            ),
+        },
+        "type": {
+            "type": "string",
+            "default": "",
+            "description": (
+                "Optional file extension filter without the dot, such as py, md. "
+                "Defaults to an empty string, which means searching all UTF-8 text files."
+            ),
+        },
+        "include_protected": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Whether to search hidden/protected directories. "
+                "Only use true after explicit user approval. Defaults to false."
+            ),
         },
     },
+    "required": ["pattern"],
+    "additionalProperties": False,
 }
-
-AVAILABLE_TOOLS = [READ_FILE_TOOL, GREP_TOOL]
 
 
 def resolve_workspace_file(path_text: str) -> Path:
@@ -387,53 +382,39 @@ def grep_tool(arguments: dict[str, Any]) -> str:
     return "\n".join(matches)
 
 
-def execute_tool_call(tool_call: dict[str, Any]) -> str:
-    """Execute one Chat Completions tool_call and return plain string content."""
-    function_call = tool_call.get("function")
-    if not isinstance(function_call, dict):
-        return "Error: malformed tool call: missing function object"
+class ReadFileTool(BaseTool):
+    name = "read_file"
+    description = READ_FILE_DESCRIPTION
+    parameters_schema = READ_FILE_PARAMETERS_SCHEMA
 
-    tool_name = function_call.get("name")
-    raw_arguments = function_call.get("arguments", "{}")
-    if not isinstance(raw_arguments, str):
-        return "Error: malformed tool call: function.arguments must be a JSON string"
-
-    try:
-        arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError as exc:
-        return f"Error: invalid tool arguments JSON: {exc.msg}"
-    if not isinstance(arguments, dict):
-        return "Error: invalid tool arguments: expected a JSON object"
-
-    try:
-        if tool_name == "read_file":
-            return read_file_tool(arguments)
-        if tool_name == "grep":
-            return grep_tool(arguments)
-        return f"Error: unknown tool: {tool_name}"
-    except Exception as exc:  # noqa: BLE001 - convert tool failures into LLM-readable text.
-        return f"Error: {exc}"
+    def _run(self, arguments: dict[str, Any]) -> ToolResult:
+        return ToolResult(ok=True, content=read_file_tool(arguments))
 
 
-def get_tool_call_name(tool_call: dict[str, Any]) -> str:
-    function_call = tool_call.get("function")
-    if not isinstance(function_call, dict):
-        return "<malformed>"
+class GrepTool(BaseTool):
+    name = "grep"
+    description = GREP_DESCRIPTION
+    parameters_schema = GREP_PARAMETERS_SCHEMA
 
-    tool_name = function_call.get("name")
-    if not isinstance(tool_name, str) or not tool_name:
-        return "<malformed>"
-
-    return tool_name
+    def _run(self, arguments: dict[str, Any]) -> ToolResult:
+        return ToolResult(ok=True, content=grep_tool(arguments))
 
 
-def call_llm(config: LLMConfig, messages: list[dict[str, Any]]) -> dict[str, Any]:
+def create_default_tool_registry() -> ToolRegistry:
+    return ToolRegistry([ReadFileTool(), GrepTool()])
+
+
+def call_llm(
+    config: LLMConfig,
+    messages: list[dict[str, Any]],
+    tool_registry: ToolRegistry,
+) -> dict[str, Any]:
     """Call one non-streaming chat completion and return the assistant message."""
     url = f"{config.base_url}/chat/completions"
     payload = {
         "model": config.model,
         "messages": messages,
-        "tools": AVAILABLE_TOOLS,
+        "tools": tool_registry.to_openai_tools(),
         "tool_choice": "auto",
     }
     request = urllib.request.Request(
@@ -493,13 +474,13 @@ def build_initial_messages() -> list[dict[str, Any]]:
     return [{"role": "system", "content": system_prompt}]
 
 
-def print_banner(config: LLMConfig, trace_logger: TraceLogger) -> None:
+def print_banner(config: LLMConfig, trace_logger: TraceLogger, tool_registry: ToolRegistry) -> None:
     print("ai-job 最小 coding agent CLI")
     print(f"model: {config.model}")
     print(f"base_url: {config.base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
     print(f"trace_log: {trace_logger.log_path}")
-    print("tools: read_file, grep")
+    print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")
     print("输入 exit / quit / Ctrl-D 退出。")
     print()
@@ -543,13 +524,19 @@ def suppress_stdin_echo_and_discard_input() -> Iterator[None]:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_attrs)
 
 
-def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]], trace_logger: TraceLogger) -> str:
+def run_agent_turn(
+    config: LLMConfig,
+    messages: list[dict[str, Any]],
+    trace_logger: TraceLogger,
+    tool_registry: ToolRegistry,
+    tool_executor: ToolExecutor,
+) -> str:
     """Run one user turn, including zero or more native tool-calling rounds."""
     for round_index in range(config.max_tool_rounds):
         round_number = round_index + 1
         trace_logger.write_round(round_number)
 
-        assistant_message = call_llm(config, messages)
+        assistant_message = call_llm(config, messages, tool_registry)
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -562,20 +549,25 @@ def run_agent_turn(config: LLMConfig, messages: list[dict[str, Any]], trace_logg
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 raise RuntimeError("LLM 响应 tool_calls[] 格式异常")
-            trace_logger.write_tool(round_number, get_tool_call_name(tool_call))
+            trace_logger.write_tool(round_number, get_openai_tool_call_name(tool_call))
 
             tool_call_id = tool_call.get("id")
             if not isinstance(tool_call_id, str):
                 raise RuntimeError("LLM 响应 tool_call 缺少 id")
 
-            tool_result_text = execute_tool_call(tool_call)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_result_text,
-                }
-            )
+            try:
+                internal_tool_call = parse_openai_tool_call(tool_call)
+            except ValueError as exc:
+                tool_result = ToolResult(
+                    ok=False,
+                    content=f"Error: {exc}",
+                    error_information=str(exc),
+                )
+                messages.append(render_openai_tool_result_message(tool_call_id, tool_result))
+                continue
+
+            tool_result = tool_executor.execute(internal_tool_call)
+            messages.append(render_openai_tool_result(internal_tool_call, tool_result))
 
     raise RuntimeError(f"工具调用轮数超过上限：{config.max_tool_rounds}")
 
@@ -593,7 +585,9 @@ def main() -> int:
 
     messages = build_initial_messages()
     trace_logger = TraceLogger.from_env()
-    print_banner(config, trace_logger)
+    tool_registry = create_default_tool_registry()
+    tool_executor = ToolExecutor(tool_registry)
+    print_banner(config, trace_logger, tool_registry)
 
     while True:
         try:
@@ -620,7 +614,13 @@ def main() -> int:
         messages.append({"role": "user", "content": user_text})
         try:
             with suppress_stdin_echo_and_discard_input():
-                assistant_text = run_agent_turn(config, messages, trace_logger)
+                assistant_text = run_agent_turn(
+                    config,
+                    messages,
+                    trace_logger,
+                    tool_registry,
+                    tool_executor,
+                )
         except KeyboardInterrupt:
             del messages[turn_start:]
             print("\n已中断。")
