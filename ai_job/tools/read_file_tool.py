@@ -7,7 +7,6 @@ from typing import Any
 
 from .base_tool import BaseTool
 from .path_policy import resolve_workspace_file
-from .types import ToolResult
 
 
 READ_FILE_DESCRIPTION = (
@@ -47,5 +46,5 @@ class ReadFileTool(BaseTool):
     def __init__(self, workspace_root: Path) -> None:
         self._workspace_root = workspace_root
 
-    def _run(self, arguments: dict[str, Any]) -> ToolResult:
-        return ToolResult(ok=True, content=read_file_text(arguments, self._workspace_root))
+    def _run(self, arguments: dict[str, Any]) -> str:
+        return read_file_text(arguments, self._workspace_root)

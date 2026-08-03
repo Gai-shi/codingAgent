@@ -14,7 +14,6 @@ from .path_policy import (
     resolve_workspace_directory,
     should_skip_directory,
 )
-from .types import ToolResult
 
 
 GREP_MAX_MATCHES = 50
@@ -169,8 +168,5 @@ class GrepTool(BaseTool):
         self._workspace_root = workspace_root
         self._request_protected_approval = request_protected_approval
 
-    def _run(self, arguments: dict[str, Any]) -> ToolResult:
-        return ToolResult(
-            ok=True,
-            content=grep_text(arguments, self._workspace_root, self._request_protected_approval),
-        )
+    def _run(self, arguments: dict[str, Any]) -> str:
+        return grep_text(arguments, self._workspace_root, self._request_protected_approval)

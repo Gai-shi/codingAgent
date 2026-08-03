@@ -7,8 +7,8 @@ import json
 from typing import Any
 
 from ..tools.base_tool import BaseTool
+from ..tools.tool_call import ToolCall
 from ..tools.tool_registry import ToolRegistry
-from ..tools.types import ToolCall, ToolResult
 from .base_tool_call_adapter import BaseToolCallAdapter
 
 
@@ -29,17 +29,16 @@ class OpenAIToolCallAdapter(BaseToolCallAdapter):
             },
         }
 
-    def get_tool_call_name_for_trace(self, raw_tool_call: dict[str, Any]) -> str:
-        """Best-effort tool name extraction for trace/debug output."""
-        function_call = raw_tool_call.get("function")
-        if not isinstance(function_call, dict):
-            return "<malformed>"
-
-        tool_name = function_call.get("name")
-        if not isinstance(tool_name, str) or not tool_name:
-            return "<malformed>"
-
-        return tool_name
+    def render_tool_call(self, tool_call: ToolCall) -> dict[str, Any]:
+        """Render an internal ToolCall as an OpenAI assistant.tool_calls item."""
+        return {
+            "id": tool_call.id,
+            "type": "function",
+            "function": {
+                "name": tool_call.name,
+                "arguments": json.dumps(tool_call.arguments, ensure_ascii=False),
+            },
+        }
 
     def get_tool_call_id(self, raw_tool_call: dict[str, Any]) -> str:
         tool_call_id = raw_tool_call.get("id")
@@ -71,15 +70,3 @@ class OpenAIToolCallAdapter(BaseToolCallAdapter):
             raise ValueError("invalid tool arguments: expected a JSON object")
 
         return ToolCall(id=tool_call_id, name=tool_name, arguments=arguments)
-
-    def render_tool_result_message(
-        self,
-        tool_call_id: str,
-        tool_result: ToolResult,
-    ) -> dict[str, Any]:
-        """Render ToolResult as the role=tool message expected by Chat Completions."""
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": tool_result.content,
-        }

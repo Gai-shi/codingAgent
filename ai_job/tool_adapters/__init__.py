@@ -1,4 +1,4 @@
-"""Model API adapter exports."""
+"""Model tool-call adapter exports."""
 
 from .base_tool_call_adapter import BaseToolCallAdapter
 from .openai_tool_call_adapter import OpenAIToolCallAdapter

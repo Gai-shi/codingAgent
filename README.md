@@ -23,10 +23,11 @@
 - 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入 Debug Trace 日志；`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
-- 工具调用已拆出内部契约：`ToolCall`、`ToolResult`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；
-- 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible Chat Completions 的格式转换收口在 `OpenAIToolCallAdapter`；
-- `ToolRegistry` 通过 `tools()` 暴露内部工具列表，OpenAI-compatible tool schema 由 adapter 渲染，工具层不再提供 `to_openai_schema()`；
-- 工具实现已独立到 `ai_job/tools/` 包中，`chat_cli.py` 只负责 CLI 主循环和 agent turn 编排。
+- 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
+- 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
+- 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
+- 模型 provider 链路已拆出到 `ai_job/provider_adapters/`：`BaseChatModel.complete(...)` 返回内部 `AssistantMessage`，`OpenAIModel` 负责 OpenAI-compatible HTTP 请求和响应解析；
+- agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
 - 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。

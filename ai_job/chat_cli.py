@@ -1,29 +1,33 @@
-"""A minimal terminal coding-agent loop with native tool calling.
+"""A minimal terminal coding-agent CLI.
 
-当前文件实现你已经拍板的边界：
+当前文件只负责：
 - 从项目级 .env 和环境变量读取配置；
-- 非流式输出；
-- 对话历史只保存在内存；
-- 使用 OpenAI-compatible Chat Completions 接口；
-- 使用原生 tool calling；
-- 通过 ToolCall / ToolResult / BaseTool / ToolRegistry / ToolExecutor 管理工具；
-- 提供 read_file 和 grep 两个只读工具。
+- 组装 CLI 需要的 agent / provider / tool 对象；
+- 维护当前进程内存里的消息历史；
+- 处理终端输入输出。
+
+agent loop、provider 请求解析、tool calling 协议转换均已拆到独立模块。
 """
 
 from __future__ import annotations
 
 import json
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
-from typing import Any
 
-from .adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
+from .agent import AgentRunner
+from .communication import (
+    MessageHistory,
+    SystemMessage,
+    UserMessage,
+    message_history_to_debug_dicts,
+)
 from .infra.env import AppEnv, EnvLoader
 from .infra.logging import LogWrapper
+from .provider_adapters import OpenAIModel
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
-from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
+from .tool_adapters import OpenAIToolCallAdapter
+from .tools import ToolExecutor, ToolRegistry, create_default_tool_registry
 
 
 EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
@@ -31,7 +35,6 @@ CONTEXT_COMMANDS = {"/context"}
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
-TRACE_TAG = "trace"
 
 
 def request_protected_grep_approval(path: Path) -> bool:
@@ -44,74 +47,8 @@ def request_protected_grep_approval(path: Path) -> bool:
     return answer == "yes"
 
 
-def call_llm(
-    app_env: AppEnv,
-    messages: list[dict[str, Any]],
-    tool_registry: ToolRegistry,
-    tool_call_adapter: BaseToolCallAdapter,
-) -> dict[str, Any]:
-    """Call one non-streaming chat completion and return the assistant message."""
-    url = f"{app_env.openai_base_url}/chat/completions"
-    payload = {
-        "model": app_env.openai_model,
-        "messages": messages,
-        "tools": tool_call_adapter.render_tool_definitions(tool_registry),
-        "tool_choice": "auto",
-    }
-    request = urllib.request.Request(
-        url=url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {app_env.openai_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=app_env.timeout_seconds) as response:
-            response_body = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM 请求失败：HTTP {exc.code}：{error_body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"LLM 请求失败：{exc.reason}") from exc
-
-    try:
-        data: dict[str, Any] = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("LLM 响应不是合法 JSON") from exc
-
-    choices = data.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("LLM 响应缺少 choices")
-
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise RuntimeError("LLM 响应 choices[0] 格式异常")
-
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        raise RuntimeError("LLM 响应缺少 message")
-
-    role = message.get("role")
-    if role != "assistant":
-        raise RuntimeError("LLM 响应 message.role 不是 assistant")
-
-    content = message.get("content")
-    tool_calls = message.get("tool_calls")
-    if content is not None and not isinstance(content, str):
-        raise RuntimeError("LLM 响应 message.content 格式异常")
-    if tool_calls is not None and not isinstance(tool_calls, list):
-        raise RuntimeError("LLM 响应 message.tool_calls 格式异常")
-    if content is None and not tool_calls:
-        raise RuntimeError("LLM 响应既没有文本 content，也没有 tool_calls")
-
-    return message
-
-
-def build_initial_messages(app_env: AppEnv) -> list[dict[str, Any]]:
-    return [{"role": "system", "content": app_env.system_prompt}]
+def build_initial_messages(app_env: AppEnv) -> MessageHistory:
+    return [SystemMessage(content=app_env.system_prompt)]
 
 
 def print_banner(app_env: AppEnv, tool_registry: ToolRegistry) -> None:
@@ -127,64 +64,10 @@ def print_banner(app_env: AppEnv, tool_registry: ToolRegistry) -> None:
     print()
 
 
-def print_context(messages: list[dict[str, Any]]) -> None:
+def print_context(messages: MessageHistory) -> None:
     print()
-    print(json.dumps(messages, ensure_ascii=False, indent=2))
+    print(json.dumps(message_history_to_debug_dicts(messages), ensure_ascii=False, indent=2))
     print()
-
-
-def run_agent_turn(
-    app_env: AppEnv,
-    messages: list[dict[str, Any]],
-    tool_registry: ToolRegistry,
-    tool_executor: ToolExecutor,
-    tool_call_adapter: BaseToolCallAdapter,
-) -> str:
-    """Run one user turn, including zero or more native tool-calling rounds."""
-    for round_index in range(app_env.max_tool_rounds):
-        round_number = round_index + 1
-        LogWrapper.debug(TRACE_TAG, f"round={round_number}")
-
-        assistant_message = call_llm(app_env, messages, tool_registry, tool_call_adapter)
-        messages.append(assistant_message)
-
-        tool_calls = assistant_message.get("tool_calls") or []
-        if not tool_calls:
-            content = assistant_message.get("content")
-            if not isinstance(content, str):
-                raise RuntimeError("LLM 最终响应缺少文本 content")
-            return content
-
-        for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                raise RuntimeError("LLM 响应 tool_calls[] 格式异常")
-            tool_name_for_trace = tool_call_adapter.get_tool_call_name_for_trace(tool_call)
-            LogWrapper.debug(TRACE_TAG, f"round={round_number} tool={tool_name_for_trace}")
-
-            try:
-                tool_call_id = tool_call_adapter.get_tool_call_id(tool_call)
-            except ValueError as exc:
-                raise RuntimeError(f"LLM 响应 tool_call 格式异常：{exc}") from exc
-
-            try:
-                internal_tool_call = tool_call_adapter.parse_tool_call(tool_call)
-            except ValueError as exc:
-                tool_result = ToolResult(
-                    ok=False,
-                    content=f"Error: {exc}",
-                    error_information=str(exc),
-                )
-                messages.append(
-                    tool_call_adapter.render_tool_result_message(tool_call_id, tool_result)
-                )
-                continue
-
-            tool_result = tool_executor.execute(internal_tool_call)
-            messages.append(
-                tool_call_adapter.render_tool_result_message(internal_tool_call.id, tool_result)
-            )
-
-    raise RuntimeError(f"工具调用轮数超过上限：{app_env.max_tool_rounds}")
 
 
 def main() -> int:
@@ -206,6 +89,13 @@ def main() -> int:
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
     tool_call_adapter = OpenAIToolCallAdapter()
+    chat_model = OpenAIModel(app_env, tool_call_adapter)
+    agent_runner = AgentRunner(
+        chat_model=chat_model,
+        tool_registry=tool_registry,
+        tool_executor=tool_executor,
+        max_tool_rounds=app_env.max_tool_rounds,
+    )
     print_banner(app_env, tool_registry)
 
     while True:
@@ -230,16 +120,10 @@ def main() -> int:
             continue
 
         turn_start = len(messages)
-        messages.append({"role": "user", "content": user_text})
+        messages.append(UserMessage(content=user_text))
         try:
             with SuppressInputEchoAndDiscard():
-                assistant_text = run_agent_turn(
-                    app_env,
-                    messages,
-                    tool_registry,
-                    tool_executor,
-                    tool_call_adapter,
-                )
+                assistant_text = agent_runner.run_turn(messages)
         except KeyboardInterrupt:
             del messages[turn_start:]
             print("\n已中断。")
