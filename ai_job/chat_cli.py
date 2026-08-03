@@ -36,6 +36,7 @@ DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
+DEFAULT_FILTER_TERMINAL_LOG_LEVEL = "debug"
 TRACE_TAG = "trace"
 
 
@@ -175,6 +176,7 @@ def print_banner(config: LLMConfig, tool_registry: ToolRegistry) -> None:
     print(f"base_url: {config.base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
     print(f"trace_log: {LogWrapper.log_path()}")
+    print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
     print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")
     print("输入 exit / quit / et / Ctrl-D 退出。")
@@ -245,6 +247,13 @@ def main() -> int:
     try:
         load_env_file(DEFAULT_ENV_FILE_PATH)
         config = LLMConfig.from_env()
+        LogWrapper.configure(
+            log_path=DEFAULT_TRACE_LOG_PATH,
+            filter_terminal_log_level=os.getenv(
+                "FILTER_TERMINAL_LOG_LEVEL",
+                DEFAULT_FILTER_TERMINAL_LOG_LEVEL,
+            ),
+        )
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
@@ -254,10 +263,6 @@ def main() -> int:
         return 2
 
     messages = build_initial_messages()
-    LogWrapper.configure(
-        log_path=DEFAULT_TRACE_LOG_PATH,
-        print_to_terminal=os.getenv("DebugMode", "true").strip().lower() == "true",
-    )
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
     tool_call_adapter = OpenAIToolCallAdapter()

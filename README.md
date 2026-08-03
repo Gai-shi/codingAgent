@@ -22,7 +22,7 @@
 - 当前工具只支持读取或检索当前工作区内的 UTF-8 文本文件；
 - 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
-- 每轮 agent loop 都会写入 Debug Trace 日志；`DebugMode` 默认按 `true` 处理，会同步把 trace 打印到终端。
+- 每轮 agent loop 都会写入 Debug Trace 日志；`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
 - 工具调用已拆出内部契约：`ToolCall`、`ToolResult`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible Chat Completions 的格式转换收口在 `OpenAIToolCallAdapter`；
 - `ToolRegistry` 通过 `tools()` 暴露内部工具列表，OpenAI-compatible tool schema 由 adapter 渲染，工具层不再提供 `to_openai_schema()`；
@@ -60,11 +60,28 @@ Trace 默认写入：
 2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool=<工具名>
 ```
 
-无论 DebugMode 取值如何，trace 都会写入日志文件。`DebugMode` 未设置时默认等价于 `true`，
-会同时打印到终端。如果希望只写日志、不打印到终端：
+无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，trace 都会写入日志文件。
+`FILTER_TERMINAL_LOG_LEVEL` 未设置时默认等价于 `debug`，会同时打印全部等级日志到终端。
+终端只输出等级大于等于当前过滤等级的日志，等级顺序为：
+
+```text
+debug < info < warn < error < none
+```
+
+对应行为：
+
+```text
+debug: debug / info / warn / error
+info : info / warn / error
+warn : warn / error
+error: error
+none : 不输出任何日志到终端
+```
+
+如果希望只写日志、不打印到终端：
 
 ```bash
-export DebugMode=false
+export FILTER_TERMINAL_LOG_LEVEL=none
 ```
 
 ### 当前进度
@@ -96,7 +113,7 @@ OPENAI_BASE_URL="https://api.openai.com/v1"
 AI_JOB_TIMEOUT_SECONDS="60"
 AI_JOB_MAX_TOOL_ROUNDS="8"
 AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
-DebugMode="false"
+FILTER_TERMINAL_LOG_LEVEL="debug"
 ```
 
 如果使用本机 ModelHub 代理，可以把 `.env` 改成：

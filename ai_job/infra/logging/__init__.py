@@ -1,6 +1,5 @@
 """Logging infrastructure."""
 
-from .log_wrapper import LogWrapper
+from .log_wrapper import LogLevel, LogWrapper
 
-__all__ = ["LogWrapper"]
-
+__all__ = ["LogLevel", "LogWrapper"]
