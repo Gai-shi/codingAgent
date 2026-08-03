@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from .types import ToolResult
@@ -44,14 +43,3 @@ class BaseTool:
 
     def _run(self, arguments: dict[str, Any]) -> ToolResult:
         raise NotImplementedError
-
-    def to_openai_schema(self) -> dict[str, Any]:
-        """Render this internal tool definition as an OpenAI Chat Completions tool schema."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": copy.deepcopy(self.parameters_schema),
-            },
-        }

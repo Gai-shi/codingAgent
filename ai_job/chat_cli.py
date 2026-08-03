@@ -22,12 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .openai_tool_adapter import (
-    get_openai_tool_call_name,
-    parse_openai_tool_call,
-    render_openai_tool_result,
-    render_openai_tool_result_message,
-)
+from .adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
@@ -137,13 +132,14 @@ def call_llm(
     config: LLMConfig,
     messages: list[dict[str, Any]],
     tool_registry: ToolRegistry,
+    tool_call_adapter: BaseToolCallAdapter,
 ) -> dict[str, Any]:
     """Call one non-streaming chat completion and return the assistant message."""
     url = f"{config.base_url}/chat/completions"
     payload = {
         "model": config.model,
         "messages": messages,
-        "tools": tool_registry.to_openai_tools(),
+        "tools": tool_call_adapter.render_tool_definitions(tool_registry),
         "tool_choice": "auto",
     }
     request = urllib.request.Request(
@@ -227,13 +223,14 @@ def run_agent_turn(
     trace_logger: TraceLogger,
     tool_registry: ToolRegistry,
     tool_executor: ToolExecutor,
+    tool_call_adapter: BaseToolCallAdapter,
 ) -> str:
     """Run one user turn, including zero or more native tool-calling rounds."""
     for round_index in range(config.max_tool_rounds):
         round_number = round_index + 1
         trace_logger.write_round(round_number)
 
-        assistant_message = call_llm(config, messages, tool_registry)
+        assistant_message = call_llm(config, messages, tool_registry, tool_call_adapter)
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -246,25 +243,33 @@ def run_agent_turn(
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 raise RuntimeError("LLM 响应 tool_calls[] 格式异常")
-            trace_logger.write_tool(round_number, get_openai_tool_call_name(tool_call))
-
-            tool_call_id = tool_call.get("id")
-            if not isinstance(tool_call_id, str):
-                raise RuntimeError("LLM 响应 tool_call 缺少 id")
+            trace_logger.write_tool(
+                round_number,
+                tool_call_adapter.get_tool_call_name_for_trace(tool_call),
+            )
 
             try:
-                internal_tool_call = parse_openai_tool_call(tool_call)
+                tool_call_id = tool_call_adapter.get_tool_call_id(tool_call)
+            except ValueError as exc:
+                raise RuntimeError(f"LLM 响应 tool_call 格式异常：{exc}") from exc
+
+            try:
+                internal_tool_call = tool_call_adapter.parse_tool_call(tool_call)
             except ValueError as exc:
                 tool_result = ToolResult(
                     ok=False,
                     content=f"Error: {exc}",
                     error_information=str(exc),
                 )
-                messages.append(render_openai_tool_result_message(tool_call_id, tool_result))
+                messages.append(
+                    tool_call_adapter.render_tool_result_message(tool_call_id, tool_result)
+                )
                 continue
 
             tool_result = tool_executor.execute(internal_tool_call)
-            messages.append(render_openai_tool_result(internal_tool_call, tool_result))
+            messages.append(
+                tool_call_adapter.render_tool_result_message(internal_tool_call.id, tool_result)
+            )
 
     raise RuntimeError(f"工具调用轮数超过上限：{config.max_tool_rounds}")
 
@@ -284,6 +289,7 @@ def main() -> int:
     trace_logger = TraceLogger.from_env()
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
+    tool_call_adapter = OpenAIToolCallAdapter()
     print_banner(config, trace_logger, tool_registry)
 
     while True:
@@ -317,6 +323,7 @@ def main() -> int:
                     trace_logger,
                     tool_registry,
                     tool_executor,
+                    tool_call_adapter,
                 )
         except KeyboardInterrupt:
             del messages[turn_start:]
