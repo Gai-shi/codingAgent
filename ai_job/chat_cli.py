@@ -234,7 +234,7 @@ def resolve_workspace_directory(path_text: str) -> Path:
     return resolved
 
 
-def has_hidden_or_protected_dir(path: Path) -> bool:
+def is_hidden_or_protected_dir(path: Path) -> bool:
     relative_parts = path.resolve().relative_to(WORKSPACE_ROOT).parts
     return any(part.startswith(".") or part in DENIED_PATH_PARTS for part in relative_parts)
 
@@ -333,7 +333,7 @@ def grep_tool(arguments: dict[str, Any]) -> str:
         raise ValueError(f"invalid regex pattern: {exc}") from exc
 
     search_root = resolve_workspace_directory(path_value)
-    if has_hidden_or_protected_dir(search_root) and not include_protected:
+    if is_hidden_or_protected_dir(search_root) and not include_protected:
         raise PermissionError(
             f"refusing to search hidden/protected directory without include_protected=true: {path_value}"
         )
