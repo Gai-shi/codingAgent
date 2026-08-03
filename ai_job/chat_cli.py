@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -22,7 +21,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator
 
 from .openai_tool_adapter import (
     get_openai_tool_call_name,
@@ -30,7 +29,7 @@ from .openai_tool_adapter import (
     render_openai_tool_result,
     render_openai_tool_result_message,
 )
-from .tool_contract import BaseTool, ToolExecutor, ToolRegistry, ToolResult
+from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit"}
@@ -40,10 +39,6 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need
 DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
-GREP_MAX_MATCHES = 50
-GREP_MAX_LINE_CHARS = 300
-DENIED_FILE_NAMES = {".env"}
-DENIED_PATH_PARTS = {".ai_job", ".git", ".venv", "__pycache__"}
 
 
 @dataclass(frozen=True)
@@ -128,145 +123,6 @@ class TraceLogger:
             print(f"[trace] {line}", file=sys.stderr)
 
 
-READ_FILE_DESCRIPTION = (
-    "Read a UTF-8 text file inside the current workspace. "
-    "Use this when you need to inspect project files before answering."
-)
-READ_FILE_PARAMETERS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "path": {
-            "type": "string",
-            "description": "Path to the file, relative to the workspace root.",
-        }
-    },
-    "required": ["path"],
-    "additionalProperties": False,
-}
-
-GREP_DESCRIPTION = (
-    "Search UTF-8 text files in the workspace using a Python regular expression. "
-    "Use this to locate relevant code before reading files."
-)
-GREP_PARAMETERS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "pattern": {
-            "type": "string",
-            "description": "Python regular expression pattern to search for.",
-        },
-        "path": {
-            "type": "string",
-            "description": (
-                "Optional directory path under the workspace root. "
-                "Defaults to the workspace root."
-            ),
-        },
-        "type": {
-            "type": "string",
-            "default": "",
-            "description": (
-                "Optional file extension filter without the dot, such as py, md. "
-                "Defaults to an empty string, which means searching all UTF-8 text files."
-            ),
-        },
-        "include_protected": {
-            "type": "boolean",
-            "default": False,
-            "description": (
-                "Whether to search hidden/protected directories. "
-                "Only use true after explicit user approval. Defaults to false."
-            ),
-        },
-    },
-    "required": ["pattern"],
-    "additionalProperties": False,
-}
-
-
-def resolve_workspace_file(path_text: str) -> Path:
-    """Resolve a user/model supplied path and keep it inside WORKSPACE_ROOT."""
-    if not path_text:
-        raise ValueError("missing required argument: path")
-
-    raw_path = Path(path_text).expanduser()
-    candidate = raw_path if raw_path.is_absolute() else WORKSPACE_ROOT / raw_path
-    resolved = candidate.resolve()
-
-    try:
-        resolved.relative_to(WORKSPACE_ROOT)
-    except ValueError as exc:
-        raise ValueError(f"path escapes workspace: {path_text}") from exc
-
-    relative_parts = resolved.relative_to(WORKSPACE_ROOT).parts
-    if resolved.name in DENIED_FILE_NAMES or any(part in DENIED_PATH_PARTS for part in relative_parts):
-        raise PermissionError(f"refusing to read protected path: {path_text}")
-
-    if not resolved.exists():
-        raise FileNotFoundError(f"file not found: {path_text}")
-    if not resolved.is_file():
-        raise ValueError(f"not a file: {path_text}")
-
-    return resolved
-
-
-def resolve_workspace_directory(path_text: str) -> Path:
-    """Resolve a path as a directory under WORKSPACE_ROOT."""
-    raw_path = Path(path_text or ".").expanduser()
-    candidate = raw_path if raw_path.is_absolute() else WORKSPACE_ROOT / raw_path
-    resolved = candidate.resolve()
-
-    try:
-        resolved.relative_to(WORKSPACE_ROOT)
-    except ValueError as exc:
-        raise ValueError(f"path escapes workspace: {path_text}") from exc
-
-    if not resolved.exists():
-        raise FileNotFoundError(f"directory not found: {path_text}")
-    if not resolved.is_dir():
-        raise ValueError(f"not a directory: {path_text}")
-
-    return resolved
-
-
-def is_hidden_or_protected_dir(path: Path) -> bool:
-    relative_parts = path.resolve().relative_to(WORKSPACE_ROOT).parts
-    return any(part.startswith(".") or part in DENIED_PATH_PARTS for part in relative_parts)
-
-
-def should_skip_directory(path: Path, allow_hidden_or_protected: bool) -> bool:
-    if allow_hidden_or_protected:
-        return False
-    return path.name.startswith(".") or path.name in DENIED_PATH_PARTS
-
-
-def normalize_file_type(type_value: Any) -> Optional[str]:
-    if type_value is None:
-        return None
-    if not isinstance(type_value, str):
-        raise ValueError('invalid arguments: "type" must be a string')
-
-    normalized = type_value.strip().lstrip(".")
-    if not normalized:
-        return None
-    if any(separator in normalized for separator in ("/", "\\")) or "*" in normalized:
-        raise ValueError('invalid arguments: "type" must be a simple file extension, such as py')
-
-    return normalized
-
-
-def read_file_tool(arguments: dict[str, Any]) -> str:
-    path_value = arguments.get("path")
-    if not isinstance(path_value, str):
-        raise ValueError('invalid arguments: "path" must be a string')
-
-    file_path = resolve_workspace_file(path_value)
-    try:
-        return file_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"file is not valid UTF-8 text: {path_value}") from exc
-
-
 @contextmanager
 def allow_stdin_echo_for_input() -> Iterator[None]:
     """Temporarily allow visible terminal input inside a suppressed-input turn."""
@@ -305,103 +161,6 @@ def request_protected_grep_approval(path: Path) -> bool:
     with allow_stdin_echo_for_input():
         answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
     return answer == "yes"
-
-
-def grep_tool(arguments: dict[str, Any]) -> str:
-    pattern_value = arguments.get("pattern")
-    if not isinstance(pattern_value, str) or not pattern_value:
-        raise ValueError('invalid arguments: "pattern" must be a non-empty string')
-
-    path_value = arguments.get("path", ".")
-    if not isinstance(path_value, str):
-        raise ValueError('invalid arguments: "path" must be a string')
-
-    include_protected = arguments.get("include_protected", False)
-    if not isinstance(include_protected, bool):
-        raise ValueError('invalid arguments: "include_protected" must be a boolean')
-
-    type_filter = normalize_file_type(arguments.get("type"))
-
-    try:
-        regex = re.compile(pattern_value)
-    except re.error as exc:
-        raise ValueError(f"invalid regex pattern: {exc}") from exc
-
-    search_root = resolve_workspace_directory(path_value)
-    if is_hidden_or_protected_dir(search_root) and not include_protected:
-        raise PermissionError(
-            f"refusing to search hidden/protected directory without include_protected=true: {path_value}"
-        )
-    if include_protected and not request_protected_grep_approval(search_root):
-        raise PermissionError("user rejected grep include_protected=true")
-
-    matches: list[str] = []
-    for current_dir, dir_names, file_names in os.walk(search_root):
-        current_path = Path(current_dir)
-        dir_names[:] = [
-            name
-            for name in sorted(dir_names)
-            if not should_skip_directory(current_path / name, include_protected)
-        ]
-
-        for file_name in sorted(file_names):
-            file_path = current_path / file_name
-            if file_path.name in DENIED_FILE_NAMES and not include_protected:
-                continue
-            if type_filter and file_path.suffix.lstrip(".") != type_filter:
-                continue
-
-            try:
-                resolved_file = file_path.resolve()
-                resolved_file.relative_to(WORKSPACE_ROOT)
-            except (OSError, ValueError):
-                continue
-            if not resolved_file.is_file():
-                continue
-
-            try:
-                with resolved_file.open("r", encoding="utf-8") as source_file:
-                    for line_number, line in enumerate(source_file, start=1):
-                        line_text = line.rstrip("\r\n")
-                        if not regex.search(line_text):
-                            continue
-
-                        if len(line_text) > GREP_MAX_LINE_CHARS:
-                            line_text = line_text[:GREP_MAX_LINE_CHARS] + "..."
-
-                        relative_file = resolved_file.relative_to(WORKSPACE_ROOT)
-                        matches.append(f"{relative_file}:{line_number}:{line_text}")
-                        if len(matches) >= GREP_MAX_MATCHES:
-                            matches.append(f"... truncated at {GREP_MAX_MATCHES} matches")
-                            return "\n".join(matches)
-            except (OSError, UnicodeDecodeError):
-                continue
-
-    if not matches:
-        return "No matches."
-    return "\n".join(matches)
-
-
-class ReadFileTool(BaseTool):
-    name = "read_file"
-    description = READ_FILE_DESCRIPTION
-    parameters_schema = READ_FILE_PARAMETERS_SCHEMA
-
-    def _run(self, arguments: dict[str, Any]) -> ToolResult:
-        return ToolResult(ok=True, content=read_file_tool(arguments))
-
-
-class GrepTool(BaseTool):
-    name = "grep"
-    description = GREP_DESCRIPTION
-    parameters_schema = GREP_PARAMETERS_SCHEMA
-
-    def _run(self, arguments: dict[str, Any]) -> ToolResult:
-        return ToolResult(ok=True, content=grep_tool(arguments))
-
-
-def create_default_tool_registry() -> ToolRegistry:
-    return ToolRegistry([ReadFileTool(), GrepTool()])
 
 
 def call_llm(
@@ -585,7 +344,7 @@ def main() -> int:
 
     messages = build_initial_messages()
     trace_logger = TraceLogger.from_env()
-    tool_registry = create_default_tool_registry()
+    tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
     print_banner(config, trace_logger, tool_registry)
 

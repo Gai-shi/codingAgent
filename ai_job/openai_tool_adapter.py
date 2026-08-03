@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .tool_contract import ToolCall, ToolResult
+from .tools import ToolCall, ToolResult
 
 
 def get_openai_tool_call_name(raw_tool_call: dict[str, Any]) -> str:

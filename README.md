@@ -25,6 +25,7 @@
 - 每轮 agent loop 都会写入 Debug Trace 日志；`DebugMode` 默认按 `true` 处理，会同步把 trace 打印到终端。
 - 工具调用已拆出内部契约：`ToolCall`、`ToolResult`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；
 - OpenAI Chat Completions 的原始 `tool_call` 格式只在 OpenAI adapter 中解析，工具执行层只处理内部 `ToolCall`。
+- 工具实现已独立到 `ai_job/tools/` 包中，`chat_cli.py` 只负责 CLI 主循环和 agent turn 编排。
 
 当前工具定义：
 
