@@ -124,4 +124,4 @@ python3 -m ai_job.chat_cli
 
 输入 `/context` 可以查看当前进程内存里的 `messages`。
 
-输入 `exit` / `quit` / `Ctrl-D` 退出。
+输入 `exit` / `quit` / `et` / `Ctrl-D` 退出。

@@ -28,7 +28,7 @@ from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
 
-EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit"}
+EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
 CONTEXT_COMMANDS = {"/context"}
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need workspace information."
@@ -209,7 +209,7 @@ def print_banner(config: LLMConfig, trace_logger: TraceLogger, tool_registry: To
     print(f"trace_log: {trace_logger.log_path}")
     print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")
-    print("输入 exit / quit / Ctrl-D 退出。")
+    print("输入 exit / quit / et / Ctrl-D 退出。")
     print()
 
 
