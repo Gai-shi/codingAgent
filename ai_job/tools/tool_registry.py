@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .base import BaseTool
+from .base_tool import BaseTool
 
 
 class ToolRegistry:

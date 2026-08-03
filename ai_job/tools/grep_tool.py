@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .base import BaseTool
+from .base_tool import BaseTool
 from .path_policy import (
     DENIED_FILE_NAMES,
     is_hidden_or_protected_dir,

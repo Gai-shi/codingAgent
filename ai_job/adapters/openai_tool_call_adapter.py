@@ -6,10 +6,10 @@ import copy
 import json
 from typing import Any
 
-from ..tools.base import BaseTool
-from ..tools.registry import ToolRegistry
+from ..tools.base_tool import BaseTool
+from ..tools.tool_registry import ToolRegistry
 from ..tools.types import ToolCall, ToolResult
-from .base import BaseToolCallAdapter
+from .base_tool_call_adapter import BaseToolCallAdapter
 
 
 class OpenAIToolCallAdapter(BaseToolCallAdapter):

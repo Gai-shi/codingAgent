@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..tools.registry import ToolRegistry
+from ..tools.tool_registry import ToolRegistry
 from ..tools.types import ToolCall, ToolResult
 
 

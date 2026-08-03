@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .registry import ToolRegistry
+from .tool_registry import ToolRegistry
 from .types import ToolCall, ToolResult
 
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from .grep import GrepTool
-from .read_file import ReadFileTool
-from .registry import ToolRegistry
+from .grep_tool import GrepTool
+from .read_file_tool import ReadFileTool
+from .tool_registry import ToolRegistry
 
 
 def create_default_tool_registry(

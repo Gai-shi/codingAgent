@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .base import BaseTool
+from .base_tool import BaseTool
 from .path_policy import resolve_workspace_file
 from .types import ToolResult
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import TerminalInputMode
+from .terminal_input_mode import TerminalInputMode
 
 
 class SuppressInputEchoAndDiscard(TerminalInputMode):

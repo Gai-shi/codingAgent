@@ -1,6 +1,6 @@
 """Model API adapter exports."""
 
-from .base import BaseToolCallAdapter
+from .base_tool_call_adapter import BaseToolCallAdapter
 from .openai_tool_call_adapter import OpenAIToolCallAdapter
 
 __all__ = [
