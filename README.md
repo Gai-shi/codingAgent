@@ -6,7 +6,7 @@
 
 已实现最小聊天闭环：
 
-- 从项目级 `.env` 和环境变量读取认证与模型配置；
+- 从项目级 `.env` 和环境变量读取运行配置；
 - 非流式调用模型；
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
@@ -29,6 +29,7 @@
 - 工具实现已独立到 `ai_job/tools/` 包中，`chat_cli.py` 只负责 CLI 主循环和 agent turn 编排。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
+- 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。
 
 当前工具定义：
 
@@ -103,6 +104,7 @@ OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Com
 ### 环境变量
 
 启动时会自动读取项目根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
+环境变量读取已集中在 `ai_job/infra/env/env_loader.py` 中，当前返回的运行配置对象为 `AppEnv`。
 
 `.env` 示例：
 

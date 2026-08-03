@@ -13,16 +13,14 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
-from .env_file_loader import load_env_file
+from .infra.env import AppEnv, EnvLoader
 from .infra.logging import LogWrapper
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
@@ -30,63 +28,10 @@ from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_r
 
 EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
 CONTEXT_COMMANDS = {"/context"}
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_SYSTEM_PROMPT = "You are a helpful coding agent. Use tools when you need workspace information."
-DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
-DEFAULT_FILTER_TERMINAL_LOG_LEVEL = "debug"
 TRACE_TAG = "trace"
-
-
-@dataclass(frozen=True)
-class LLMConfig:
-    api_key: str
-    model: str
-    base_url: str
-    timeout_seconds: float
-    max_tool_rounds: int
-
-    @classmethod
-    def from_env(cls) -> "LLMConfig":
-        api_key = os.getenv("OPENAI_API_KEY")
-        model = os.getenv("OPENAI_MODEL")
-
-        missing_names: list[str] = []
-        if not api_key:
-            missing_names.append("OPENAI_API_KEY")
-        if not model:
-            missing_names.append("OPENAI_MODEL")
-        if missing_names:
-            missing = ", ".join(missing_names)
-            raise ValueError(f"缺少必要环境变量：{missing}")
-
-        timeout_raw = os.getenv("AI_JOB_TIMEOUT_SECONDS", "60")
-        try:
-            timeout_seconds = float(timeout_raw)
-        except ValueError as exc:
-            raise ValueError("AI_JOB_TIMEOUT_SECONDS 必须是数字") from exc
-        if timeout_seconds <= 0:
-            raise ValueError("AI_JOB_TIMEOUT_SECONDS 必须大于 0")
-
-        max_tool_rounds_raw = os.getenv("AI_JOB_MAX_TOOL_ROUNDS", str(DEFAULT_MAX_TOOL_ROUNDS))
-        try:
-            max_tool_rounds = int(max_tool_rounds_raw)
-        except ValueError as exc:
-            raise ValueError("AI_JOB_MAX_TOOL_ROUNDS 必须是整数") from exc
-        if max_tool_rounds <= 0:
-            raise ValueError("AI_JOB_MAX_TOOL_ROUNDS 必须大于 0")
-
-        base_url = os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-
-        return cls(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            timeout_seconds=timeout_seconds,
-            max_tool_rounds=max_tool_rounds,
-        )
 
 
 def request_protected_grep_approval(path: Path) -> bool:
@@ -100,15 +45,15 @@ def request_protected_grep_approval(path: Path) -> bool:
 
 
 def call_llm(
-    config: LLMConfig,
+    app_env: AppEnv,
     messages: list[dict[str, Any]],
     tool_registry: ToolRegistry,
     tool_call_adapter: BaseToolCallAdapter,
 ) -> dict[str, Any]:
     """Call one non-streaming chat completion and return the assistant message."""
-    url = f"{config.base_url}/chat/completions"
+    url = f"{app_env.openai_base_url}/chat/completions"
     payload = {
-        "model": config.model,
+        "model": app_env.openai_model,
         "messages": messages,
         "tools": tool_call_adapter.render_tool_definitions(tool_registry),
         "tool_choice": "auto",
@@ -117,14 +62,14 @@ def call_llm(
         url=url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {config.api_key}",
+            "Authorization": f"Bearer {app_env.openai_api_key}",
             "Content-Type": "application/json",
         },
         method="POST",
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
+        with urllib.request.urlopen(request, timeout=app_env.timeout_seconds) as response:
             response_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
@@ -165,15 +110,14 @@ def call_llm(
     return message
 
 
-def build_initial_messages() -> list[dict[str, Any]]:
-    system_prompt = os.getenv("AI_JOB_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
-    return [{"role": "system", "content": system_prompt}]
+def build_initial_messages(app_env: AppEnv) -> list[dict[str, Any]]:
+    return [{"role": "system", "content": app_env.system_prompt}]
 
 
-def print_banner(config: LLMConfig, tool_registry: ToolRegistry) -> None:
+def print_banner(app_env: AppEnv, tool_registry: ToolRegistry) -> None:
     print("ai-job 最小 coding agent CLI")
-    print(f"model: {config.model}")
-    print(f"base_url: {config.base_url}")
+    print(f"model: {app_env.openai_model}")
+    print(f"base_url: {app_env.openai_base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
     print(f"trace_log: {LogWrapper.log_path()}")
     print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
@@ -190,18 +134,18 @@ def print_context(messages: list[dict[str, Any]]) -> None:
 
 
 def run_agent_turn(
-    config: LLMConfig,
+    app_env: AppEnv,
     messages: list[dict[str, Any]],
     tool_registry: ToolRegistry,
     tool_executor: ToolExecutor,
     tool_call_adapter: BaseToolCallAdapter,
 ) -> str:
     """Run one user turn, including zero or more native tool-calling rounds."""
-    for round_index in range(config.max_tool_rounds):
+    for round_index in range(app_env.max_tool_rounds):
         round_number = round_index + 1
         LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
-        assistant_message = call_llm(config, messages, tool_registry, tool_call_adapter)
+        assistant_message = call_llm(app_env, messages, tool_registry, tool_call_adapter)
         messages.append(assistant_message)
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -240,19 +184,15 @@ def run_agent_turn(
                 tool_call_adapter.render_tool_result_message(internal_tool_call.id, tool_result)
             )
 
-    raise RuntimeError(f"工具调用轮数超过上限：{config.max_tool_rounds}")
+    raise RuntimeError(f"工具调用轮数超过上限：{app_env.max_tool_rounds}")
 
 
 def main() -> int:
     try:
-        load_env_file(DEFAULT_ENV_FILE_PATH)
-        config = LLMConfig.from_env()
+        app_env = EnvLoader.load(DEFAULT_ENV_FILE_PATH)
         LogWrapper.configure(
             log_path=DEFAULT_TRACE_LOG_PATH,
-            filter_terminal_log_level=os.getenv(
-                "FILTER_TERMINAL_LOG_LEVEL",
-                DEFAULT_FILTER_TERMINAL_LOG_LEVEL,
-            ),
+            filter_terminal_log_level=app_env.filter_terminal_log_level,
         )
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
@@ -262,11 +202,11 @@ def main() -> int:
         )
         return 2
 
-    messages = build_initial_messages()
+    messages = build_initial_messages(app_env)
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
     tool_call_adapter = OpenAIToolCallAdapter()
-    print_banner(config, tool_registry)
+    print_banner(app_env, tool_registry)
 
     while True:
         try:
@@ -294,7 +234,7 @@ def main() -> int:
         try:
             with SuppressInputEchoAndDiscard():
                 assistant_text = run_agent_turn(
-                    config,
+                    app_env,
                     messages,
                     tool_registry,
                     tool_executor,
