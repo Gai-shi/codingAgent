@@ -112,6 +112,14 @@ export OPENAI_MODEL="gpt-5.5"
 
 ### 启动
 
+推荐从包入口启动：
+
+```bash
+python3 -m ai_job
+```
+
+旧入口仍可使用：
+
 ```bash
 python3 -m ai_job.chat_cli
 ```
