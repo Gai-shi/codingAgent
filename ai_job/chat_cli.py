@@ -18,12 +18,12 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
 from .env_file_loader import load_env_file
+from .infra.logging import LogWrapper
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, ToolResult, create_default_tool_registry
 
@@ -36,6 +36,7 @@ DEFAULT_MAX_TOOL_ROUNDS = 8
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
+TRACE_TAG = "trace"
 
 
 @dataclass(frozen=True)
@@ -85,39 +86,6 @@ class LLMConfig:
             timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds,
         )
-
-
-@dataclass(frozen=True)
-class TraceLogger:
-    log_path: Path
-    print_to_terminal: bool
-
-    @classmethod
-    def from_env(cls) -> "TraceLogger":
-        return cls(
-            log_path=DEFAULT_TRACE_LOG_PATH,
-            print_to_terminal=os.getenv("DebugMode", "true").strip().lower() == "true",
-        )
-
-    def write_round(self, round_number: int) -> None:
-        self._write(f"round={round_number}")
-
-    def write_tool(self, round_number: int, tool_name: str) -> None:
-        self._write(f"round={round_number} tool={tool_name}")
-
-    def _write(self, event_text: str) -> None:
-        timestamp = datetime.now().isoformat(timespec="seconds")
-        line = f"{timestamp} {event_text}"
-
-        try:
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(line + "\n")
-        except OSError as exc:
-            raise RuntimeError(f"Trace 写入失败：{self.log_path}：{exc}") from exc
-
-        if self.print_to_terminal:
-            print(f"[trace] {line}", file=sys.stderr)
 
 
 def request_protected_grep_approval(path: Path) -> bool:
@@ -201,12 +169,12 @@ def build_initial_messages() -> list[dict[str, Any]]:
     return [{"role": "system", "content": system_prompt}]
 
 
-def print_banner(config: LLMConfig, trace_logger: TraceLogger, tool_registry: ToolRegistry) -> None:
+def print_banner(config: LLMConfig, tool_registry: ToolRegistry) -> None:
     print("ai-job 最小 coding agent CLI")
     print(f"model: {config.model}")
     print(f"base_url: {config.base_url}")
     print(f"workspace: {WORKSPACE_ROOT}")
-    print(f"trace_log: {trace_logger.log_path}")
+    print(f"trace_log: {LogWrapper.log_path()}")
     print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")
     print("输入 exit / quit / et / Ctrl-D 退出。")
@@ -222,7 +190,6 @@ def print_context(messages: list[dict[str, Any]]) -> None:
 def run_agent_turn(
     config: LLMConfig,
     messages: list[dict[str, Any]],
-    trace_logger: TraceLogger,
     tool_registry: ToolRegistry,
     tool_executor: ToolExecutor,
     tool_call_adapter: BaseToolCallAdapter,
@@ -230,7 +197,7 @@ def run_agent_turn(
     """Run one user turn, including zero or more native tool-calling rounds."""
     for round_index in range(config.max_tool_rounds):
         round_number = round_index + 1
-        trace_logger.write_round(round_number)
+        LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
         assistant_message = call_llm(config, messages, tool_registry, tool_call_adapter)
         messages.append(assistant_message)
@@ -245,10 +212,8 @@ def run_agent_turn(
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 raise RuntimeError("LLM 响应 tool_calls[] 格式异常")
-            trace_logger.write_tool(
-                round_number,
-                tool_call_adapter.get_tool_call_name_for_trace(tool_call),
-            )
+            tool_name_for_trace = tool_call_adapter.get_tool_call_name_for_trace(tool_call)
+            LogWrapper.debug(TRACE_TAG, f"round={round_number} tool={tool_name_for_trace}")
 
             try:
                 tool_call_id = tool_call_adapter.get_tool_call_id(tool_call)
@@ -289,11 +254,14 @@ def main() -> int:
         return 2
 
     messages = build_initial_messages()
-    trace_logger = TraceLogger.from_env()
+    LogWrapper.configure(
+        log_path=DEFAULT_TRACE_LOG_PATH,
+        print_to_terminal=os.getenv("DebugMode", "true").strip().lower() == "true",
+    )
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
     tool_call_adapter = OpenAIToolCallAdapter()
-    print_banner(config, trace_logger, tool_registry)
+    print_banner(config, tool_registry)
 
     while True:
         try:
@@ -323,7 +291,6 @@ def main() -> int:
                 assistant_text = run_agent_turn(
                     config,
                     messages,
-                    trace_logger,
                     tool_registry,
                     tool_executor,
                     tool_call_adapter,

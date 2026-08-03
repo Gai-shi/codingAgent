@@ -28,6 +28,7 @@
 - `ToolRegistry` 通过 `tools()` 暴露内部工具列表，OpenAI-compatible tool schema 由 adapter 渲染，工具层不再提供 `to_openai_schema()`；
 - 工具实现已独立到 `ai_job/tools/` 包中，`chat_cli.py` 只负责 CLI 主循环和 agent turn 编排。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
+- 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
 
 当前工具定义：
 
@@ -52,11 +53,11 @@ Trace 默认写入：
 .ai_job/trace.log
 ```
 
-当前只记录两类最小事件：
+当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 
 ```text
-round=<轮次>
-round=<轮次> tool=<工具名>
+2026-08-03T20:10:00 DEBUG [trace] round=<轮次>
+2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool=<工具名>
 ```
 
 无论 DebugMode 取值如何，trace 都会写入日志文件。`DebugMode` 未设置时默认等价于 `true`，
