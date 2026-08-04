@@ -58,12 +58,31 @@ apply_patch(patch: string) -> string
 - hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
 - 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
 
-### Debug Trace
+### 工作区与 Debug Trace
+
+`workspace` 是 agent 读、搜、改代码的边界：
+
+- 默认使用启动命令时的当前目录；
+- 也可以用 `--workspace` 显式指定；
+- `read_file`、`grep`、`apply_patch` 都只能操作 workspace 内的文件。
+
+例如让 agent 修另一个项目：
+
+```bash
+cd /path/to/target_project
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job
+```
+
+或：
+
+```bash
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
+```
 
 Trace 默认写入：
 
 ```text
-.ai_job/trace.log
+<workspace>/.ai_job/trace.log
 ```
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
@@ -115,7 +134,7 @@ OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Com
 
 ### 环境变量
 
-启动时会自动读取项目根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
+启动时会自动读取 ai_job 源码根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
 环境变量读取已集中在 `ai_job/infra/env/env_loader.py` 中，当前返回的运行配置对象为 `AppEnv`。
 
 `.env` 示例：
@@ -148,10 +167,16 @@ OPENAI_MODEL="gpt-5.5"
 python3 -m ai_job
 ```
 
+默认 workspace 是当前目录；如果要在任意目录启动并指定目标项目：
+
+```bash
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
+```
+
 旧入口仍可使用：
 
 ```bash
-python3 -m ai_job.chat_cli
+python3 -m ai_job.chat_cli --workspace /path/to/target_project
 ```
 
 输入 `/context` 可以查看当前进程内存里的 `messages`。

@@ -11,9 +11,11 @@ agent loop、provider 请求解析、tool calling 协议转换均已拆到独立
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Callable, Optional, Sequence
 
 from .agent import AgentRunner
 from .communication import (
@@ -31,30 +33,58 @@ from .tools import ToolExecutor, ToolRegistry, create_default_tool_registry
 
 EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
 CONTEXT_COMMANDS = {"/context"}
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ENV_FILE_PATH = WORKSPACE_ROOT / ".env"
-DEFAULT_TRACE_LOG_PATH = WORKSPACE_ROOT / ".ai_job" / "trace.log"
+APP_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_ENV_FILE_PATH = APP_ROOT / ".env"
 
 
-def request_protected_grep_approval(path: Path) -> bool:
-    relative_path = path.relative_to(WORKSPACE_ROOT) if path != WORKSPACE_ROOT else Path(".")
-    print()
-    print("grep 请求检索隐藏目录或保护目录。")
-    print(f"范围：{relative_path}")
-    with AllowInputEcho():
-        answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
-    return answer == "yes"
+def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ai-job 最小 coding agent CLI")
+    parser.add_argument(
+        "-w",
+        "--workspace",
+        default=None,
+        help="agent 读写代码的工作区目录。默认使用启动命令时的当前目录。",
+    )
+    return parser.parse_args(argv)
 
 
-def build_initial_messages(app_env: AppEnv) -> MessageHistory:
-    return [SystemMessage(content=app_env.system_prompt)]
+def resolve_workspace_root(path_text: Optional[str]) -> Path:
+    raw_path = Path(path_text).expanduser() if path_text else Path.cwd()
+    resolved = raw_path.resolve()
+    if not resolved.exists():
+        raise ValueError(f"workspace 不存在：{resolved}")
+    if not resolved.is_dir():
+        raise ValueError(f"workspace 不是目录：{resolved}")
+    return resolved
 
 
-def print_banner(app_env: AppEnv, tool_registry: ToolRegistry) -> None:
+def trace_log_path_for_workspace(workspace_root: Path) -> Path:
+    return workspace_root / ".ai_job" / "trace.log"
+
+
+def create_protected_grep_approval(workspace_root: Path) -> Callable[[Path], bool]:
+    def request_protected_grep_approval(path: Path) -> bool:
+        relative_path = path.relative_to(workspace_root) if path != workspace_root else Path(".")
+        print()
+        print("grep 请求检索隐藏目录或保护目录。")
+        print(f"范围：{relative_path}")
+        with AllowInputEcho():
+            answer = input("如果你同意本次检索，请输入 yes；其它输入表示拒绝> ").strip().lower()
+        return answer == "yes"
+
+    return request_protected_grep_approval
+
+
+def build_initial_messages(app_env: AppEnv, workspace_root: Path) -> MessageHistory:
+    system_prompt = f"{app_env.system_prompt}\n\nCurrent workspace root: {workspace_root}"
+    return [SystemMessage(content=system_prompt)]
+
+
+def print_banner(app_env: AppEnv, tool_registry: ToolRegistry, workspace_root: Path) -> None:
     print("ai-job 最小 coding agent CLI")
     print(f"model: {app_env.openai_model}")
     print(f"base_url: {app_env.openai_base_url}")
-    print(f"workspace: {WORKSPACE_ROOT}")
+    print(f"workspace: {workspace_root}")
     print(f"trace_log: {LogWrapper.log_path()}")
     print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
     print(f"tools: {', '.join(tool_registry.names())}")
@@ -69,23 +99,25 @@ def print_context(messages: MessageHistory) -> None:
     print()
 
 
-def main() -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
+        args = parse_cli_args(argv)
+        workspace_root = resolve_workspace_root(args.workspace)
         app_env = EnvLoader.load(DEFAULT_ENV_FILE_PATH)
         LogWrapper.configure(
-            log_path=DEFAULT_TRACE_LOG_PATH,
+            log_path=trace_log_path_for_workspace(workspace_root),
             filter_terminal_log_level=app_env.filter_terminal_log_level,
         )
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
-            "示例：OPENAI_API_KEY=xxx OPENAI_MODEL=xxx python3 -m ai_job",
+            "示例：OPENAI_API_KEY=xxx OPENAI_MODEL=xxx python3 -m ai_job --workspace /path/to/project",
             file=sys.stderr,
         )
         return 2
 
-    messages = build_initial_messages(app_env)
-    tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
+    messages = build_initial_messages(app_env, workspace_root)
+    tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
     agent_runner = AgentRunner(
@@ -94,7 +126,7 @@ def main() -> int:
         tool_executor=tool_executor,
         max_tool_rounds=app_env.max_tool_rounds,
     )
-    print_banner(app_env, tool_registry)
+    print_banner(app_env, tool_registry, workspace_root)
 
     while True:
         try:
