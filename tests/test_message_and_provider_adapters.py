@@ -11,6 +11,7 @@ from ai_job.communication import (
     message_history_to_debug_dicts,
 )
 from ai_job.infra.env import AppEnv
+from ai_job.infra.http import BaseHttpClient, HttpClientError
 from ai_job.provider_adapters import OpenAIModel
 from ai_job.tool_adapters import OpenAIToolCallAdapter
 from ai_job.tools import BaseTool, ToolCall, ToolRegistry
@@ -27,6 +28,26 @@ class ExampleTool(BaseTool):
 
     def _run(self, arguments):
         return arguments["text"]
+
+
+class FakeHttpClient(BaseHttpClient):
+    def __init__(self, response_body, error=None):
+        self._response_body = response_body
+        self._error = error
+        self.calls = []
+
+    def post_json(self, url, payload, headers, timeout_seconds):
+        self.calls.append(
+            {
+                "url": url,
+                "payload": payload,
+                "headers": headers,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        if self._error is not None:
+            raise self._error
+        return self._response_body
 
 
 def make_app_env():
@@ -105,65 +126,95 @@ class OpenAIToolCallAdapterTest(unittest.TestCase):
 
 
 class OpenAIModelTest(unittest.TestCase):
-    def test_parse_assistant_message_accepts_text_response(self):
-        model = OpenAIModel(make_app_env())
-        response_body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi"}}]})
+    def test_complete_posts_rendered_payload_and_parses_text_response(self):
+        fake_http_client = FakeHttpClient(
+            json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi"}}]})
+        )
+        model = OpenAIModel(make_app_env(), http_client=fake_http_client)
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="hi"),
+            AssistantMessage(
+                content=None,
+                tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "question"})],
+            ),
+            ToolMessage(tool_call_id="call-1", content="tool result"),
+        ]
+        registry = ToolRegistry([ExampleTool()])
 
-        result = model._parse_assistant_message(response_body)
+        result = model.complete(history, registry)
 
         self.assertEqual(result, AssistantMessage(content="hi", tool_calls=[]))
-
-    def test_parse_assistant_message_accepts_tool_calls_without_text(self):
-        model = OpenAIModel(make_app_env())
-        response_body = json.dumps(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [
-                                {
-                                    "id": "call-1",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "example",
-                                        "arguments": '{"text": "hi"}',
-                                    },
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
+        self.assertEqual(len(fake_http_client.calls), 1)
+        call = fake_http_client.calls[0]
+        self.assertEqual(call["url"], "http://example.test/v1/chat/completions")
+        self.assertEqual(call["headers"]["Authorization"], "Bearer key")
+        self.assertEqual(call["headers"]["Content-Type"], "application/json")
+        self.assertEqual(call["timeout_seconds"], 1.0)
+        self.assertEqual(call["payload"]["model"], "model")
+        self.assertEqual(call["payload"]["tool_choice"], "auto")
+        self.assertEqual(
+            call["payload"]["messages"][0],
+            {"role": "system", "content": "sys"},
         )
+        self.assertEqual(
+            call["payload"]["messages"][1],
+            {"role": "user", "content": "hi"},
+        )
+        self.assertEqual(call["payload"]["messages"][2]["role"], "assistant")
+        self.assertEqual(call["payload"]["messages"][2]["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(
+            call["payload"]["messages"][3],
+            {"role": "tool", "tool_call_id": "call-1", "content": "tool result"},
+        )
+        self.assertEqual(call["payload"]["tools"][0]["function"]["name"], "example")
 
-        result = model._parse_assistant_message(response_body)
+    def test_complete_parses_tool_calls_without_text(self):
+        fake_http_client = FakeHttpClient(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "example",
+                                            "arguments": '{"text": "hi"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+        model = OpenAIModel(make_app_env(), http_client=fake_http_client)
+
+        result = model.complete([UserMessage(content="hi")], ToolRegistry([]))
 
         self.assertEqual(result.content, None)
-        self.assertEqual(result.tool_calls, [ToolCall(id="call-1", name="example", arguments={"text": "hi"})])
+        self.assertEqual(
+            result.tool_calls,
+            [ToolCall(id="call-1", name="example", arguments={"text": "hi"})],
+        )
 
-    def test_parse_assistant_message_rejects_missing_choices(self):
-        model = OpenAIModel(make_app_env())
+    def test_complete_rejects_missing_choices(self):
+        model = OpenAIModel(make_app_env(), http_client=FakeHttpClient("{}"))
 
         with self.assertRaisesRegex(RuntimeError, "缺少 choices"):
-            model._parse_assistant_message("{}")
+            model.complete([UserMessage(content="hi")], ToolRegistry([]))
 
-    def test_render_message_uses_openai_chat_completions_roles(self):
-        model = OpenAIModel(make_app_env())
-
-        assistant = AssistantMessage(
-            content=None,
-            tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "hi"})],
+    def test_complete_wraps_http_client_errors_as_llm_request_failures(self):
+        model = OpenAIModel(
+            make_app_env(),
+            http_client=FakeHttpClient(response_body="", error=HttpClientError("network down")),
         )
 
-        self.assertEqual(model._render_message(SystemMessage("sys")), {"role": "system", "content": "sys"})
-        self.assertEqual(model._render_message(UserMessage("hi")), {"role": "user", "content": "hi"})
-        self.assertEqual(
-            model._render_message(ToolMessage(tool_call_id="call-1", content="ok")),
-            {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
-        )
-        rendered_assistant = model._render_message(assistant)
-        self.assertEqual(rendered_assistant["role"], "assistant")
-        self.assertEqual(rendered_assistant["content"], None)
-        self.assertEqual(rendered_assistant["tool_calls"][0]["id"], "call-1")
+        with self.assertRaisesRegex(RuntimeError, "LLM 请求失败：network down"):
+            model.complete([UserMessage(content="hi")], ToolRegistry([]))
