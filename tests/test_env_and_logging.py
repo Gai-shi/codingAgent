@@ -45,6 +45,17 @@ class EnvFileLoaderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "缺少 ="):
                 load_env_file(env_path)
 
+    def test_load_env_file_rejects_invalid_key_and_directory_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            env_path = Path(tmp_dir) / ".env"
+            env_path.write_text("1INVALID=value\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "变量名非法"):
+                load_env_file(env_path)
+
+            with self.assertRaisesRegex(ValueError, "不是文件"):
+                load_env_file(Path(tmp_dir))
+
 
 class EnvLoaderTest(unittest.TestCase):
     def test_load_from_current_environment_returns_typed_app_env(self):
@@ -85,6 +96,40 @@ class EnvLoaderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "AI_JOB_MAX_TOOL_ROUNDS 必须大于 0"):
                 EnvLoader.load_from_current_environment()
 
+    def test_load_from_current_environment_uses_defaults(self):
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "key", "OPENAI_MODEL": "model"},
+            clear=True,
+        ):
+            app_env = EnvLoader.load_from_current_environment()
+
+        self.assertEqual(app_env.openai_base_url, "https://api.openai.com/v1")
+        self.assertEqual(app_env.timeout_seconds, 60.0)
+        self.assertEqual(app_env.max_tool_rounds, 8)
+        self.assertEqual(
+            app_env.system_prompt,
+            "You are a helpful coding agent. Use tools when you need workspace information.",
+        )
+        self.assertEqual(app_env.filter_terminal_log_level, "debug")
+
+    def test_load_from_current_environment_rejects_invalid_timeout_and_rounds(self):
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "key", "OPENAI_MODEL": "model", "AI_JOB_TIMEOUT_SECONDS": "slow"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_TIMEOUT_SECONDS 必须是数字"):
+                EnvLoader.load_from_current_environment()
+
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "key", "OPENAI_MODEL": "model", "AI_JOB_MAX_TOOL_ROUNDS": "many"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_MAX_TOOL_ROUNDS 必须是整数"):
+                EnvLoader.load_from_current_environment()
+
 
 class LogWrapperTest(unittest.TestCase):
     def test_log_wrapper_writes_single_line_log_and_respects_terminal_filter(self):
@@ -104,3 +149,22 @@ class LogWrapperTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaisesRegex(ValueError, "FILTER_TERMINAL_LOG_LEVEL"):
                 LogWrapper.configure(Path(tmp_dir) / "trace.log", "verbose")
+
+    def test_log_wrapper_prints_only_messages_at_or_above_filter_level(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "trace.log"
+            LogWrapper.configure(log_path=log_path, filter_terminal_log_level="warn")
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                LogWrapper.info("trace", "hidden")
+                LogWrapper.warn("trace", "visible")
+                LogWrapper.error("trace", "also visible")
+
+            terminal_text = stderr.getvalue()
+            self.assertNotIn("hidden", terminal_text)
+            self.assertIn(" WARN [trace] visible\n", terminal_text)
+            self.assertIn(" ERROR [trace] also visible\n", terminal_text)
+
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn(" INFO [trace] hidden\n", log_text)

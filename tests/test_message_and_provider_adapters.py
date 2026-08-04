@@ -124,6 +124,27 @@ class OpenAIToolCallAdapterTest(unittest.TestCase):
                 }
             )
 
+    def test_parse_tool_call_rejects_malformed_openai_tool_calls(self):
+        adapter = OpenAIToolCallAdapter()
+
+        malformed_cases = [
+            ({}, "missing id"),
+            ({"id": "call-1"}, "missing function object"),
+            ({"id": "call-1", "function": {}}, "missing function.name"),
+            (
+                {"id": "call-1", "function": {"name": "example", "arguments": {"text": "hi"}}},
+                "function.arguments must be a JSON string",
+            ),
+            (
+                {"id": "call-1", "function": {"name": "example", "arguments": "{"}},
+                "invalid tool arguments JSON",
+            ),
+        ]
+        for raw_tool_call, expected_message in malformed_cases:
+            with self.subTest(expected_message=expected_message):
+                with self.assertRaisesRegex(ValueError, expected_message):
+                    adapter.parse_tool_call(raw_tool_call)
+
 
 class OpenAIModelTest(unittest.TestCase):
     def test_complete_posts_rendered_payload_and_parses_text_response(self):
@@ -218,3 +239,53 @@ class OpenAIModelTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "LLM 请求失败：network down"):
             model.complete([UserMessage(content="hi")], ToolRegistry([]))
+
+    def test_complete_rejects_malformed_response_json_and_message_shape(self):
+        malformed_cases = [
+            ("not json", "不是合法 JSON"),
+            (json.dumps({"choices": ["bad"]}), "choices\\[0\\] 格式异常"),
+            (json.dumps({"choices": [{"message": "bad"}]}), "缺少 message"),
+            (json.dumps({"choices": [{"message": {"role": "user", "content": "hi"}}]}), "不是 assistant"),
+            (
+                json.dumps({"choices": [{"message": {"role": "assistant", "content": 123}}]}),
+                "message.content 格式异常",
+            ),
+            (
+                json.dumps({"choices": [{"message": {"role": "assistant", "tool_calls": "bad"}}]}),
+                "message.tool_calls 格式异常",
+            ),
+            (
+                json.dumps({"choices": [{"message": {"role": "assistant", "content": None}}]}),
+                "既没有文本 content，也没有 tool_calls",
+            ),
+            (
+                json.dumps({"choices": [{"message": {"role": "assistant", "tool_calls": ["bad"]}}]}),
+                "tool_calls\\[\\] 格式异常",
+            ),
+            (
+                json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call-1",
+                                            "function": {"name": "example", "arguments": "{"},
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "tool_call 格式异常",
+            ),
+        ]
+
+        for response_body, expected_message in malformed_cases:
+            with self.subTest(expected_message=expected_message):
+                model = OpenAIModel(make_app_env(), http_client=FakeHttpClient(response_body))
+                with self.assertRaisesRegex(RuntimeError, expected_message):
+                    model.complete([UserMessage(content="hi")], ToolRegistry([]))
