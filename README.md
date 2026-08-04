@@ -11,16 +11,16 @@
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
 
-## 第二版：原生 tool calling + 只读工具
+## 第二版：原生 tool calling + 文件工具
 
 当前 CLI 已开始从 chat bot 向 coding agent 过渡：
 
-- 每次请求都会把 `read_file` 和 `grep` 作为 Chat Completions 原生 tool 传给模型；
+- 每次请求都会把 `read_file`、`grep` 和 `apply_patch` 作为 Chat Completions 原生 tool 传给模型；
 - 如果模型返回 `tool_calls`，CLI 会在本地执行对应工具；
 - 工具结果用 `role=tool`、`tool_call_id=...`、`content=<普通字符串>` 回填到 `messages`；
 - CLI 会继续调用模型，直到模型返回普通 assistant 文本；
-- 当前工具只支持读取或检索当前工作区内的 UTF-8 文本文件；
-- 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
+- 当前工具支持读取、检索或通过 git diff patch 修改当前工作区内的 UTF-8 文本文件；
+- 默认拒绝读取、检索或修改 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入 Debug Trace 日志；`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
@@ -38,6 +38,7 @@
 ```text
 read_file(path: string) -> string
 grep(pattern: string, path?: string, type?: string, include_protected?: boolean) -> string
+apply_patch(patch: string) -> string
 ```
 
 `grep` 使用 Python 正则表达式搜索文本文件：
@@ -47,6 +48,15 @@ grep(pattern: string, path?: string, type?: string, include_protected?: boolean)
 - `type`：可选，按文件扩展名过滤，例如 `py`、`kt`、`md`；默认空字符串，表示搜索所有 UTF-8 文本文件；
 - `include_protected`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
 - 输出最多返回 50 条匹配，每条格式为 `relative_path:line_number:line_text`。
+
+`apply_patch` 应用 git diff 子集：
+
+- `patch`：必填，包含 `diff --git` 文件头和 unified hunk 的 git diff 文本；
+- 支持多文件修改、新增文件和删除文件；
+- 不支持 rename / copy / binary patch / quoted path；
+- 新增文件目标已存在时会报错，不允许覆盖；
+- hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
+- 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
 
 ### Debug Trace
 

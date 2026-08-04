@@ -35,6 +35,32 @@ def resolve_workspace_file(path_text: str, workspace_root: Path) -> Path:
     return resolved
 
 
+def resolve_workspace_patch_path(path_text: str, workspace_root: Path, operation: str) -> Path:
+    """Resolve a patch target path and keep it inside workspace_root.
+
+    The target may or may not exist yet because apply_patch supports file
+    creation and deletion. Existence and file-kind checks are left to the tool
+    layer that knows the requested patch operation.
+    """
+    if not path_text:
+        raise ValueError("missing patch path")
+
+    raw_path = Path(path_text).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else workspace_root / raw_path
+    resolved = candidate.resolve()
+
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError as exc:
+        raise ValueError(f"path escapes workspace: {path_text}") from exc
+
+    relative_parts = resolved.relative_to(workspace_root).parts
+    if resolved.name in DENIED_FILE_NAMES or any(part in DENIED_PATH_PARTS for part in relative_parts):
+        raise PermissionError(f"refusing to {operation} protected path: {path_text}")
+
+    return resolved
+
+
 def resolve_workspace_directory(path_text: str, workspace_root: Path) -> Path:
     """Resolve a path as a directory under workspace_root."""
     raw_path = Path(path_text or ".").expanduser()

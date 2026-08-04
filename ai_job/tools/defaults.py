@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
+from .apply_patch_tool import ApplyPatchTool
 from .grep_tool import GrepTool
 from .read_file_tool import ReadFileTool
 from .tool_registry import ToolRegistry
@@ -18,5 +19,6 @@ def create_default_tool_registry(
         [
             ReadFileTool(workspace_root),
             GrepTool(workspace_root, request_protected_grep_approval),
+            ApplyPatchTool(workspace_root),
         ]
     )

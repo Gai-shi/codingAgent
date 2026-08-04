@@ -1,5 +1,6 @@
 """Tool package exports."""
 
+from .apply_patch_tool import ApplyPatchTool
 from .base_tool import BaseTool
 from .defaults import create_default_tool_registry
 from .grep_tool import GrepTool
@@ -9,6 +10,7 @@ from .tool_executor import ToolExecutor
 from .tool_registry import ToolRegistry
 
 __all__ = [
+    "ApplyPatchTool",
     "BaseTool",
     "GrepTool",
     "ReadFileTool",
