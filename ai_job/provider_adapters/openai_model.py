@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Optional
 
 from ..communication import (
     AssistantMessage,
@@ -16,7 +16,7 @@ from ..communication import (
     UserMessage,
 )
 from ..infra.env import AppEnv
-from ..tool_adapters import BaseToolCallAdapter
+from ..tool_adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
 from ..tools import ToolRegistry
 from .base_chat_model import BaseChatModel
 
@@ -24,9 +24,13 @@ from .base_chat_model import BaseChatModel
 class OpenAIModel(BaseChatModel):
     """Non-streaming OpenAI-compatible Chat Completions model adapter."""
 
-    def __init__(self, app_env: AppEnv, tool_call_adapter: BaseToolCallAdapter) -> None:
+    def __init__(
+        self,
+        app_env: AppEnv,
+        tool_call_adapter: Optional[BaseToolCallAdapter] = None,
+    ) -> None:
         self._app_env = app_env
-        self._tool_call_adapter = tool_call_adapter
+        self._tool_call_adapter = tool_call_adapter or OpenAIToolCallAdapter()
 
     def complete(
         self,

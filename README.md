@@ -26,7 +26,7 @@
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
 - 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
-- 模型 provider 链路已拆出到 `ai_job/provider_adapters/`：`BaseChatModel.complete(...)` 返回内部 `AssistantMessage`，`OpenAIModel` 负责 OpenAI-compatible HTTP 请求和响应解析；
+- 模型 provider 链路已拆出到 `ai_job/provider_adapters/`：`BaseChatModel.complete(...)` 返回内部 `AssistantMessage`，`OpenAIModel` 负责 OpenAI-compatible HTTP 请求和响应解析，并默认内置 `OpenAIToolCallAdapter`；
 - agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。

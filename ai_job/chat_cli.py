@@ -26,7 +26,6 @@ from .infra.env import AppEnv, EnvLoader
 from .infra.logging import LogWrapper
 from .provider_adapters import OpenAIModel
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
-from .tool_adapters import OpenAIToolCallAdapter
 from .tools import ToolExecutor, ToolRegistry, create_default_tool_registry
 
 
@@ -88,8 +87,7 @@ def main() -> int:
     messages = build_initial_messages(app_env)
     tool_registry = create_default_tool_registry(WORKSPACE_ROOT, request_protected_grep_approval)
     tool_executor = ToolExecutor(tool_registry)
-    tool_call_adapter = OpenAIToolCallAdapter()
-    chat_model = OpenAIModel(app_env, tool_call_adapter)
+    chat_model = OpenAIModel(app_env)
     agent_runner = AgentRunner(
         chat_model=chat_model,
         tool_registry=tool_registry,
