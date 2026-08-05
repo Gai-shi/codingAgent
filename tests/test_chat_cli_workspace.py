@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_job.chat_cli import build_initial_messages, resolve_workspace_root, trace_log_path_for_workspace
+from ai_job.chat_cli import APP_ROOT, build_initial_messages, default_trace_log_path, resolve_workspace_root
 from ai_job.infra.env import AppEnv
 
 
@@ -56,10 +56,8 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertIn("system prompt", messages[0].content)
         self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
 
-    def test_trace_log_path_lives_under_workspace(self):
-        workspace = Path("/tmp/example-workspace")
-
-        self.assertEqual(trace_log_path_for_workspace(workspace), workspace / ".ai_job" / "trace.log")
+    def test_trace_log_path_lives_under_ai_job_project_root(self):
+        self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "trace.log")
 
 
 if __name__ == "__main__":

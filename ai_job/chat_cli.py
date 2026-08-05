@@ -35,6 +35,7 @@ EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
 CONTEXT_COMMANDS = {"/context"}
 APP_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = APP_ROOT / ".env"
+DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "trace.log"
 
 
 def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -58,8 +59,8 @@ def resolve_workspace_root(path_text: Optional[str]) -> Path:
     return resolved
 
 
-def trace_log_path_for_workspace(workspace_root: Path) -> Path:
-    return workspace_root / ".ai_job" / "trace.log"
+def default_trace_log_path() -> Path:
+    return DEFAULT_TRACE_LOG_PATH
 
 
 def create_protected_grep_approval(workspace_root: Path) -> Callable[[Path], bool]:
@@ -105,7 +106,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         workspace_root = resolve_workspace_root(args.workspace)
         app_env = EnvLoader.load(DEFAULT_ENV_FILE_PATH)
         LogWrapper.configure(
-            log_path=trace_log_path_for_workspace(workspace_root),
+            log_path=default_trace_log_path(),
             filter_terminal_log_level=app_env.filter_terminal_log_level,
         )
     except ValueError as exc:

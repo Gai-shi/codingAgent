@@ -82,8 +82,10 @@ PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --wor
 Trace 默认写入：
 
 ```text
-<workspace>/.ai_job/trace.log
+<ai_job 源码根目录>/.ai_job/trace.log
 ```
+
+这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录。
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 
