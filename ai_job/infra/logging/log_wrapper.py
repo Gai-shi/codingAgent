@@ -41,15 +41,21 @@ class LogWrapper:
     _filter_terminal_log_level: ClassVar[LogLevel] = LogLevel.DEBUG
 
     @classmethod
-    def configure(cls, log_path: Path, filter_terminal_log_level: str) -> None:
+    def configure(
+        cls,
+        log_path: Path,
+        filter_terminal_log_level: str,
+        session_started_at: Optional[datetime] = None,
+    ) -> None:
         """Configure the shared logger.
 
         这是类级别配置，不需要调用方实例化 LogWrapper。
         log_path 是日志基准路径；真实写入路径会在文件名里追加本次会话开始时间。
         例如 .ai_job/logs/log.log 会写入 .ai_job/logs/log-20260805-103812-123.log。
         """
+        started_at = session_started_at or cls._now()
         cls._base_log_path = log_path
-        cls._log_path = cls._session_log_path(log_path, cls._now())
+        cls._log_path = cls._session_log_path(log_path, started_at)
         cls._filter_terminal_log_level = cls._normalize_filter_level(filter_terminal_log_level)
 
     @classmethod

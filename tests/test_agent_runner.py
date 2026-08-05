@@ -7,6 +7,7 @@ from pathlib import Path
 from ai_job.agent import AgentRunner
 from ai_job.communication import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from ai_job.infra.logging import LogWrapper
+from ai_job.infra.session_recording import SessionRecorder
 from ai_job.provider_adapters import BaseChatModel
 from ai_job.tools import BaseTool, ToolCall, ToolExecutor, ToolRegistry
 
@@ -40,6 +41,7 @@ class AgentRunnerTest(unittest.TestCase):
     def setUp(self):
         self._tmp_dir = tempfile.TemporaryDirectory()
         LogWrapper.configure(Path(self._tmp_dir.name) / "trace.log", "none")
+        SessionRecorder.configure(Path(self._tmp_dir.name) / "sessions" / "sessions.md")
 
     def tearDown(self):
         self._tmp_dir.cleanup()
@@ -72,6 +74,14 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(history[-2].content, "hello")
         self.assertEqual(history[-1].content, "done")
         self.assertIsInstance(model.seen_histories[1][-1], ToolMessage)
+
+        session_text = SessionRecorder.session_path().read_text(encoding="utf-8")
+        self.assertIn("## ", session_text)
+        self.assertIn("AssistantMessage", session_text)
+        self.assertIn("ToolCall echo", session_text)
+        self.assertIn('"text": "hello"', session_text)
+        self.assertIn("ToolResult echo", session_text)
+        self.assertIn("hello", session_text)
 
     def test_run_turn_rejects_final_assistant_without_text(self):
         registry = ToolRegistry([])

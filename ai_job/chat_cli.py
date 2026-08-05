@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -26,6 +27,7 @@ from .communication import (
 )
 from .infra.env import AppEnv, EnvLoader
 from .infra.logging import LogWrapper
+from .infra.session_recording import SessionRecorder
 from .provider_adapters import OpenAIModel
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
 from .tools import ToolExecutor, ToolRegistry, create_default_tool_registry
@@ -36,6 +38,7 @@ CONTEXT_COMMANDS = {"/context"}
 APP_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = APP_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "logs" / "log.log"
+DEFAULT_SESSION_RECORD_PATH = APP_ROOT / ".ai_job" / "sessions" / "sessions.md"
 
 
 def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -63,6 +66,10 @@ def default_trace_log_path() -> Path:
     return DEFAULT_TRACE_LOG_PATH
 
 
+def default_session_record_path() -> Path:
+    return DEFAULT_SESSION_RECORD_PATH
+
+
 def create_protected_grep_approval(workspace_root: Path) -> Callable[[Path], bool]:
     def request_protected_grep_approval(path: Path) -> bool:
         relative_path = path.relative_to(workspace_root) if path != workspace_root else Path(".")
@@ -87,6 +94,7 @@ def print_banner(app_env: AppEnv, tool_registry: ToolRegistry, workspace_root: P
     print(f"base_url: {app_env.openai_base_url}")
     print(f"workspace: {workspace_root}")
     print(f"log_file: {LogWrapper.log_path()}")
+    print(f"session_record: {SessionRecorder.session_path()}")
     print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
     print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")
@@ -105,11 +113,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args = parse_cli_args(argv)
         workspace_root = resolve_workspace_root(args.workspace)
         app_env = EnvLoader.load(DEFAULT_ENV_FILE_PATH)
+        session_started_at = datetime.now()
         LogWrapper.configure(
             log_path=default_trace_log_path(),
             filter_terminal_log_level=app_env.filter_terminal_log_level,
+            session_started_at=session_started_at,
+        )
+        SessionRecorder.configure(
+            session_path=default_session_record_path(),
+            session_started_at=session_started_at,
+            metadata={
+                "workspace": str(workspace_root),
+                "model": app_env.openai_model,
+                "base_url": app_env.openai_base_url,
+            },
         )
         LogWrapper.cleanup_expired_logs_async()
+        SessionRecorder.cleanup_expired_session_records_async()
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
@@ -119,6 +139,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     messages = build_initial_messages(app_env, workspace_root)
+    SessionRecorder.record_text("SystemMessage", messages[0].content)
     tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
@@ -153,6 +174,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         turn_start = len(messages)
         messages.append(UserMessage(content=user_text))
+        SessionRecorder.record_text("UserMessage", user_text)
         try:
             with SuppressInputEchoAndDiscard():
                 assistant_text = agent_runner.run_turn(messages)

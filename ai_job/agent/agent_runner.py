@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from ..communication import MessageHistory, ToolMessage
 from ..infra.logging import LogWrapper
+from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
 from ..tools import ToolExecutor, ToolRegistry
 
@@ -34,6 +37,13 @@ class AgentRunner:
 
             assistant_message = self._chat_model.complete(history, self._tool_registry)
             history.append(assistant_message)
+            SessionRecorder.record_json(
+                "AssistantMessage",
+                {
+                    "content": assistant_message.content,
+                    "tool_calls": [asdict(tool_call) for tool_call in assistant_message.tool_calls],
+                },
+            )
 
             if not assistant_message.tool_calls:
                 if not isinstance(assistant_message.content, str):
@@ -42,6 +52,7 @@ class AgentRunner:
 
             for tool_call in assistant_message.tool_calls:
                 LogWrapper.debug(TRACE_TAG, f"round={round_number} tool={tool_call.name}")
+                SessionRecorder.record_json(f"ToolCall {tool_call.name}", asdict(tool_call))
                 tool_content = self._tool_executor.execute(tool_call)
                 history.append(
                     ToolMessage(
@@ -49,5 +60,6 @@ class AgentRunner:
                         content=tool_content,
                     )
                 )
+                SessionRecorder.record_text(f"ToolResult {tool_call.name}", tool_content)
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")

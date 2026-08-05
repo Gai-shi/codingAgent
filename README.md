@@ -24,6 +24,8 @@
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入运行日志；每次 CLI 启动生成一个独立日志文件，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
 - 每次启动 CLI 后会异步清理过期运行日志：文件名里的会话开始时间超过一个自然月的 `log-YYYYMMDD-HHMMSS-mmm.log` 文件会被删除。
+- 每次 CLI 启动还会生成一个独立 Markdown 会话记录文件；会话记录不读取 `FILTER_TERMINAL_LOG_LEVEL`，只直接写入 `sessions/`。
+- 每次启动 CLI 后会异步清理过期会话记录：文件名里的会话开始时间超过一个自然月的 `sessions-YYYYMMDD-HHMMSS-mmm.md` 文件会被删除。
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
 - 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
@@ -31,6 +33,7 @@
 - agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
+- 会话记录基础设施已独立到 `ai_job/infra/session_recording/` 包中，通用入口为 `SessionRecorder.record_text/record_json(...)`。
 - 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。
 - HTTP 请求基础设施已独立到 `ai_job/infra/http/` 包中，`OpenAIModel` 默认使用 `UrlLibHttpClient`，测试时可注入 fake `BaseHttpClient`。
 
@@ -59,7 +62,7 @@ apply_patch(patch: string) -> string
 - hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
 - 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
 
-### 工作区与运行日志
+### 工作区、运行日志与会话记录
 
 `workspace` 是 agent 读、搜、改代码的边界：
 
@@ -95,6 +98,20 @@ PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --wor
 这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；同一次 CLI 启动期间，即使进程跨过 0 点，也会继续写入启动时创建的同一个日志文件。
 
 CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除 `.ai_job/logs/` 下匹配 `log-YYYYMMDD-HHMMSS-mmm.log` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
+
+会话记录默认写入：
+
+```text
+<ai_job 源码根目录>/.ai_job/sessions/sessions-YYYYMMDD-HHMMSS-mmm.md
+```
+
+会话记录与运行日志使用同一个 CLI 启动时间命名。例如 2026-08-05 10:38:12.123 启动 CLI 时，会话记录会写入：
+
+```text
+<ai_job 源码根目录>/.ai_job/sessions/sessions-20260805-103812-123.md
+```
+
+会话记录当前记录主链路内容：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolCall`、`ToolResult`。它不读取 `FILTER_TERMINAL_LOG_LEVEL`，也不打印到终端。CLI 每次启动后还会开启一个 daemon 后台线程清理 `.ai_job/sessions/` 下匹配 `sessions-YYYYMMDD-HHMMSS-mmm.md` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 

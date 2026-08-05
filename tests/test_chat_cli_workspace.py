@@ -8,7 +8,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_job.chat_cli import APP_ROOT, build_initial_messages, default_trace_log_path, main, resolve_workspace_root
+from ai_job.chat_cli import (
+    APP_ROOT,
+    build_initial_messages,
+    default_session_record_path,
+    default_trace_log_path,
+    main,
+    resolve_workspace_root,
+)
 from ai_job.infra.env import AppEnv
 
 
@@ -62,7 +69,13 @@ class ChatCliWorkspaceTest(unittest.TestCase):
     def test_trace_log_path_lives_under_ai_job_project_root(self):
         self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
-    def test_main_starts_expired_log_cleanup_after_logging_configuration(self):
+    def test_session_record_path_lives_under_ai_job_project_root(self):
+        self.assertEqual(
+            default_session_record_path(),
+            APP_ROOT / ".ai_job" / "sessions" / "sessions.md",
+        )
+
+    def test_main_starts_log_and_session_cleanup_after_configuration(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch.dict(
                 os.environ,
@@ -73,13 +86,34 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                with patch("ai_job.chat_cli.LogWrapper.cleanup_expired_logs_async") as cleanup_mock:
-                    with patch("builtins.input", side_effect=EOFError):
-                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                            exit_code = main(["--workspace", tmp_dir])
+                with patch("ai_job.chat_cli.LogWrapper.configure") as log_configure_mock:
+                    with patch("ai_job.chat_cli.LogWrapper.cleanup_expired_logs_async") as log_cleanup_mock:
+                        with patch("ai_job.chat_cli.SessionRecorder.configure") as session_configure_mock:
+                            with patch(
+                                "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
+                            ) as session_cleanup_mock:
+                                with patch("ai_job.chat_cli.SessionRecorder.record_text") as record_text_mock:
+                                    with patch("builtins.input", side_effect=EOFError):
+                                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                            exit_code = main(["--workspace", tmp_dir])
 
         self.assertEqual(exit_code, 0)
-        cleanup_mock.assert_called_once_with()
+        log_configure_mock.assert_called_once()
+        log_started_at = log_configure_mock.call_args.kwargs["session_started_at"]
+        log_cleanup_mock.assert_called_once_with()
+        session_configure_mock.assert_called_once()
+        self.assertEqual(session_configure_mock.call_args.kwargs["session_started_at"], log_started_at)
+        self.assertEqual(
+            session_configure_mock.call_args.kwargs["session_path"],
+            default_session_record_path(),
+        )
+        self.assertEqual(
+            session_configure_mock.call_args.kwargs["metadata"]["workspace"],
+            str(Path(tmp_dir).resolve()),
+        )
+        session_cleanup_mock.assert_called_once_with()
+        record_text_mock.assert_called_once()
+        self.assertEqual(record_text_mock.call_args.args[0], "SystemMessage")
 
 
 if __name__ == "__main__":
