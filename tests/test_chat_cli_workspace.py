@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
-from ai_job.chat_cli import APP_ROOT, build_initial_messages, default_trace_log_path, resolve_workspace_root
+from ai_job.chat_cli import APP_ROOT, build_initial_messages, default_trace_log_path, main, resolve_workspace_root
 from ai_job.infra.env import AppEnv
 
 
@@ -58,6 +61,25 @@ class ChatCliWorkspaceTest(unittest.TestCase):
 
     def test_trace_log_path_lives_under_ai_job_project_root(self):
         self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "trace.log")
+
+    def test_main_starts_expired_log_cleanup_after_logging_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "key",
+                    "OPENAI_MODEL": "model",
+                    "FILTER_TERMINAL_LOG_LEVEL": "none",
+                },
+                clear=True,
+            ):
+                with patch("ai_job.chat_cli.LogWrapper.cleanup_expired_logs_async") as cleanup_mock:
+                    with patch("builtins.input", side_effect=EOFError):
+                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                            exit_code = main(["--workspace", tmp_dir])
+
+        self.assertEqual(exit_code, 0)
+        cleanup_mock.assert_called_once_with()
 
 
 if __name__ == "__main__":

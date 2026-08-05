@@ -109,6 +109,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             log_path=default_trace_log_path(),
             filter_terminal_log_level=app_env.filter_terminal_log_level,
         )
+        LogWrapper.cleanup_expired_logs_async()
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(

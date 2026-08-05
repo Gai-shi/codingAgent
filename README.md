@@ -23,6 +23,7 @@
 - 默认拒绝读取、检索或修改 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
 - 每轮 agent loop 都会写入 Debug Trace 日志；日志文件按天切分，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
+- 每次启动 CLI 后会异步清理过期 Debug Trace 日志：超过一个自然月的 `trace-YYYY-MM-DD.log` 文件会被删除。
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
 - 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
@@ -92,6 +93,8 @@ Trace 默认以这个基准路径派生按天日志文件：
 ```
 
 这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；如果进程跨过 0 点，下一条日志会自动写入新日期文件。
+
+CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除同目录下匹配 `trace-YYYY-MM-DD.log` 命名规则、且日期早于“当前日期的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 

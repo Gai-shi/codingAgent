@@ -193,3 +193,43 @@ class LogWrapperTest(unittest.TestCase):
             second_log = Path(tmp_dir) / "trace-2026-08-06.log"
             self.assertIn("before midnight", first_log.read_text(encoding="utf-8"))
             self.assertIn("after midnight", second_log.read_text(encoding="utf-8"))
+
+    def test_log_wrapper_cleanup_deletes_daily_logs_older_than_one_month(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_dir = Path(tmp_dir)
+            base_log_path = log_dir / "trace.log"
+            expired_log = log_dir / "trace-2026-07-04.log"
+            cutoff_log = log_dir / "trace-2026-07-05.log"
+            current_log = log_dir / "trace-2026-08-05.log"
+            unrelated_log = log_dir / "other-2026-07-01.log"
+            malformed_log = log_dir / "trace-not-a-date.log"
+            for log_path in [expired_log, cutoff_log, current_log, unrelated_log, malformed_log]:
+                log_path.write_text("log", encoding="utf-8")
+
+            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
+
+            with patch.object(LogWrapper, "_today", return_value=datetime(2026, 8, 5).date()):
+                deleted_paths = LogWrapper.cleanup_expired_logs()
+
+            self.assertEqual(deleted_paths, [expired_log])
+            self.assertFalse(expired_log.exists())
+            self.assertTrue(cutoff_log.exists())
+            self.assertTrue(current_log.exists())
+            self.assertTrue(unrelated_log.exists())
+            self.assertTrue(malformed_log.exists())
+
+    def test_log_wrapper_can_cleanup_expired_logs_in_background(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_dir = Path(tmp_dir)
+            base_log_path = log_dir / "trace.log"
+            expired_log = log_dir / "trace-2026-07-04.log"
+            expired_log.write_text("log", encoding="utf-8")
+
+            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
+
+            with patch.object(LogWrapper, "_today", return_value=datetime(2026, 8, 5).date()):
+                cleanup_thread = LogWrapper.cleanup_expired_logs_async()
+                cleanup_thread.join(timeout=1)
+
+            self.assertFalse(cleanup_thread.is_alive())
+            self.assertFalse(expired_log.exists())
