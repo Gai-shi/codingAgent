@@ -35,7 +35,7 @@ EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
 CONTEXT_COMMANDS = {"/context"}
 APP_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = APP_ROOT / ".env"
-DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "trace.log"
+DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "logs" / "log.log"
 
 
 def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -86,7 +86,7 @@ def print_banner(app_env: AppEnv, tool_registry: ToolRegistry, workspace_root: P
     print(f"model: {app_env.openai_model}")
     print(f"base_url: {app_env.openai_base_url}")
     print(f"workspace: {workspace_root}")
-    print(f"trace_log: {LogWrapper.log_path()}")
+    print(f"log_file: {LogWrapper.log_path()}")
     print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
     print(f"tools: {', '.join(tool_registry.names())}")
     print("输入 /context 查看当前内存里的 messages。")

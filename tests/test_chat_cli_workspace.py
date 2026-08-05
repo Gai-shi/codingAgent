@@ -60,7 +60,7 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
 
     def test_trace_log_path_lives_under_ai_job_project_root(self):
-        self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "trace.log")
+        self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
     def test_main_starts_expired_log_cleanup_after_logging_configuration(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

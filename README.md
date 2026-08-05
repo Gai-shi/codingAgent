@@ -22,8 +22,8 @@
 - 当前工具支持读取、检索或通过 git diff patch 修改当前工作区内的 UTF-8 文本文件；
 - 默认拒绝读取、检索或修改 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
-- 每轮 agent loop 都会写入 Debug Trace 日志；日志文件按天切分，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
-- 每次启动 CLI 后会异步清理过期 Debug Trace 日志：超过一个自然月的 `trace-YYYY-MM-DD.log` 文件会被删除。
+- 每轮 agent loop 都会写入运行日志；每次 CLI 启动生成一个独立日志文件，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
+- 每次启动 CLI 后会异步清理过期运行日志：文件名里的会话开始时间超过一个自然月的 `log-YYYYMMDD-HHMMSS-mmm.log` 文件会被删除。
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
 - 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
@@ -59,7 +59,7 @@ apply_patch(patch: string) -> string
 - hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
 - 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
 
-### 工作区与 Debug Trace
+### 工作区与运行日志
 
 `workspace` 是 agent 读、搜、改代码的边界：
 
@@ -80,21 +80,21 @@ PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job
 PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
 ```
 
-Trace 默认以这个基准路径派生按天日志文件：
+运行日志默认以这个基准路径派生按会话日志文件：
 
 ```text
-<ai_job 源码根目录>/.ai_job/trace-YYYY-MM-DD.log
+<ai_job 源码根目录>/.ai_job/logs/log-YYYYMMDD-HHMMSS-mmm.log
 ```
 
-例如 2026-08-05 的日志会写入：
+例如 2026-08-05 10:38:12.123 启动 CLI 时，日志会写入：
 
 ```text
-<ai_job 源码根目录>/.ai_job/trace-2026-08-05.log
+<ai_job 源码根目录>/.ai_job/logs/log-20260805-103812-123.log
 ```
 
-这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；如果进程跨过 0 点，下一条日志会自动写入新日期文件。
+这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；同一次 CLI 启动期间，即使进程跨过 0 点，也会继续写入启动时创建的同一个日志文件。
 
-CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除同目录下匹配 `trace-YYYY-MM-DD.log` 命名规则、且日期早于“当前日期的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
+CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除 `.ai_job/logs/` 下匹配 `log-YYYYMMDD-HHMMSS-mmm.log` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 
@@ -103,7 +103,7 @@ CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理�
 2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool=<工具名>
 ```
 
-无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，trace 都会写入日志文件。
+无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，日志都会写入日志文件。
 `FILTER_TERMINAL_LOG_LEVEL` 未设置时默认等价于 `debug`，会同时打印全部等级日志到终端。
 终端只输出等级大于等于当前过滤等级的日志，等级顺序为：
 

@@ -135,7 +135,7 @@ class EnvLoaderTest(unittest.TestCase):
 class LogWrapperTest(unittest.TestCase):
     def test_log_wrapper_writes_single_line_log_and_respects_terminal_filter(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            log_path = Path(tmp_dir) / "nested" / "trace.log"
+            log_path = Path(tmp_dir) / "nested" / "log.log"
             LogWrapper.configure(log_path=log_path, filter_terminal_log_level="none")
 
             stderr = io.StringIO()
@@ -143,20 +143,20 @@ class LogWrapperTest(unittest.TestCase):
                 LogWrapper.info("trace", "line1\nline2")
 
             self.assertEqual(stderr.getvalue(), "")
-            daily_log_path = LogWrapper.log_path()
-            self.assertEqual(daily_log_path.parent, log_path.parent)
-            self.assertRegex(daily_log_path.name, r"^trace-\d{4}-\d{2}-\d{2}\.log$")
-            log_text = daily_log_path.read_text(encoding="utf-8")
+            session_log_path = LogWrapper.log_path()
+            self.assertEqual(session_log_path.parent, log_path.parent)
+            self.assertRegex(session_log_path.name, r"^log-\d{8}-\d{6}-\d{3}\.log$")
+            log_text = session_log_path.read_text(encoding="utf-8")
             self.assertIn(" INFO [trace] line1\\nline2\n", log_text)
 
     def test_log_wrapper_rejects_unknown_terminal_filter_level(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaisesRegex(ValueError, "FILTER_TERMINAL_LOG_LEVEL"):
-                LogWrapper.configure(Path(tmp_dir) / "trace.log", "verbose")
+                LogWrapper.configure(Path(tmp_dir) / "log.log", "verbose")
 
     def test_log_wrapper_prints_only_messages_at_or_above_filter_level(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            log_path = Path(tmp_dir) / "trace.log"
+            log_path = Path(tmp_dir) / "log.log"
             LogWrapper.configure(log_path=log_path, filter_terminal_log_level="warn")
 
             stderr = io.StringIO()
@@ -173,42 +173,41 @@ class LogWrapperTest(unittest.TestCase):
             log_text = LogWrapper.log_path().read_text(encoding="utf-8")
             self.assertIn(" INFO [trace] hidden\n", log_text)
 
-    def test_log_wrapper_rotates_daily_file_by_current_date(self):
+    def test_log_wrapper_keeps_writing_to_session_log_after_midnight(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            base_log_path = Path(tmp_dir) / "trace.log"
-            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
-
             with patch.object(
                 LogWrapper,
                 "_now",
                 side_effect=[
-                    datetime(2026, 8, 5, 23, 59, 59),
+                    datetime(2026, 8, 5, 23, 59, 59, 123000),
+                    datetime(2026, 8, 5, 23, 59, 59, 999000),
                     datetime(2026, 8, 6, 0, 0, 1),
                 ],
             ):
+                base_log_path = Path(tmp_dir) / "log.log"
+                LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
                 LogWrapper.info("trace", "before midnight")
                 LogWrapper.info("trace", "after midnight")
 
-            first_log = Path(tmp_dir) / "trace-2026-08-05.log"
-            second_log = Path(tmp_dir) / "trace-2026-08-06.log"
-            self.assertIn("before midnight", first_log.read_text(encoding="utf-8"))
-            self.assertIn("after midnight", second_log.read_text(encoding="utf-8"))
+            session_log = Path(tmp_dir) / "log-20260805-235959-123.log"
+            self.assertIn("before midnight", session_log.read_text(encoding="utf-8"))
+            self.assertIn("after midnight", session_log.read_text(encoding="utf-8"))
+            self.assertEqual(len(list(Path(tmp_dir).glob("log-*.log"))), 1)
 
-    def test_log_wrapper_cleanup_deletes_daily_logs_older_than_one_month(self):
+    def test_log_wrapper_cleanup_deletes_session_logs_older_than_one_month_by_filename(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_dir = Path(tmp_dir)
-            base_log_path = log_dir / "trace.log"
-            expired_log = log_dir / "trace-2026-07-04.log"
-            cutoff_log = log_dir / "trace-2026-07-05.log"
-            current_log = log_dir / "trace-2026-08-05.log"
-            unrelated_log = log_dir / "other-2026-07-01.log"
-            malformed_log = log_dir / "trace-not-a-date.log"
+            base_log_path = log_dir / "log.log"
+            expired_log = log_dir / "log-20260705-103812-122.log"
+            cutoff_log = log_dir / "log-20260705-103812-123.log"
+            current_log = log_dir / "log-20260805-103812-123.log"
+            unrelated_log = log_dir / "other-20260701-000000-000.log"
+            malformed_log = log_dir / "log-not-a-date.log"
             for log_path in [expired_log, cutoff_log, current_log, unrelated_log, malformed_log]:
                 log_path.write_text("log", encoding="utf-8")
 
-            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
-
-            with patch.object(LogWrapper, "_today", return_value=datetime(2026, 8, 5).date()):
+            with patch.object(LogWrapper, "_now", return_value=datetime(2026, 8, 5, 10, 38, 12, 123000)):
+                LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
                 deleted_paths = LogWrapper.cleanup_expired_logs()
 
             self.assertEqual(deleted_paths, [expired_log])
@@ -221,13 +220,12 @@ class LogWrapperTest(unittest.TestCase):
     def test_log_wrapper_can_cleanup_expired_logs_in_background(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             log_dir = Path(tmp_dir)
-            base_log_path = log_dir / "trace.log"
-            expired_log = log_dir / "trace-2026-07-04.log"
+            base_log_path = log_dir / "log.log"
+            expired_log = log_dir / "log-20260705-103812-122.log"
             expired_log.write_text("log", encoding="utf-8")
 
-            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
-
-            with patch.object(LogWrapper, "_today", return_value=datetime(2026, 8, 5).date()):
+            with patch.object(LogWrapper, "_now", return_value=datetime(2026, 8, 5, 10, 38, 12, 123000)):
+                LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
                 cleanup_thread = LogWrapper.cleanup_expired_logs_async()
                 cleanup_thread.join(timeout=1)
 
