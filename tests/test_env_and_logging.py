@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,7 +143,10 @@ class LogWrapperTest(unittest.TestCase):
                 LogWrapper.info("trace", "line1\nline2")
 
             self.assertEqual(stderr.getvalue(), "")
-            log_text = log_path.read_text(encoding="utf-8")
+            daily_log_path = LogWrapper.log_path()
+            self.assertEqual(daily_log_path.parent, log_path.parent)
+            self.assertRegex(daily_log_path.name, r"^trace-\d{4}-\d{2}-\d{2}\.log$")
+            log_text = daily_log_path.read_text(encoding="utf-8")
             self.assertIn(" INFO [trace] line1\\nline2\n", log_text)
 
     def test_log_wrapper_rejects_unknown_terminal_filter_level(self):
@@ -166,5 +170,26 @@ class LogWrapperTest(unittest.TestCase):
             self.assertIn(" WARN [trace] visible\n", terminal_text)
             self.assertIn(" ERROR [trace] also visible\n", terminal_text)
 
-            log_text = log_path.read_text(encoding="utf-8")
+            log_text = LogWrapper.log_path().read_text(encoding="utf-8")
             self.assertIn(" INFO [trace] hidden\n", log_text)
+
+    def test_log_wrapper_rotates_daily_file_by_current_date(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_log_path = Path(tmp_dir) / "trace.log"
+            LogWrapper.configure(log_path=base_log_path, filter_terminal_log_level="none")
+
+            with patch.object(
+                LogWrapper,
+                "_now",
+                side_effect=[
+                    datetime(2026, 8, 5, 23, 59, 59),
+                    datetime(2026, 8, 6, 0, 0, 1),
+                ],
+            ):
+                LogWrapper.info("trace", "before midnight")
+                LogWrapper.info("trace", "after midnight")
+
+            first_log = Path(tmp_dir) / "trace-2026-08-05.log"
+            second_log = Path(tmp_dir) / "trace-2026-08-06.log"
+            self.assertIn("before midnight", first_log.read_text(encoding="utf-8"))
+            self.assertIn("after midnight", second_log.read_text(encoding="utf-8"))

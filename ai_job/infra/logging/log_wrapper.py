@@ -2,7 +2,8 @@
 
 LogWrapper 是当前项目的通用日志门面：
 - 对外暴露 classmethod，调用方不需要实例化；
-- 启动时可以通过 configure() 注入日志路径和终端日志过滤等级；
+- 启动时可以通过 configure() 注入日志基准路径和终端日志过滤等级；
+- 每次写入时按当前日期派生真实日志文件，做到每天一个日志文件；
 - debug/info/warn/error 四个方法保持同一调用形态。
 """
 
@@ -33,7 +34,7 @@ class LogWrapper:
         LogLevel.ERROR: 40,
         LogLevel.NONE: 50,
     }
-    _log_path: ClassVar[Path] = Path(".ai_job") / "trace.log"
+    _base_log_path: ClassVar[Path] = Path(".ai_job") / "trace.log"
     _filter_terminal_log_level: ClassVar[LogLevel] = LogLevel.DEBUG
 
     @classmethod
@@ -41,13 +42,15 @@ class LogWrapper:
         """Configure the shared logger.
 
         这是类级别配置，不需要调用方实例化 LogWrapper。
+        log_path 是日志基准路径；真实写入路径会在文件名里追加当天日期。
+        例如 .ai_job/trace.log 会写入 .ai_job/trace-2026-08-05.log。
         """
-        cls._log_path = log_path
+        cls._base_log_path = log_path
         cls._filter_terminal_log_level = cls._normalize_filter_level(filter_terminal_log_level)
 
     @classmethod
     def log_path(cls) -> Path:
-        return cls._log_path
+        return cls._daily_log_path(cls._base_log_path, cls._now().date().isoformat())
 
     @classmethod
     def filter_terminal_log_level(cls) -> str:
@@ -74,19 +77,29 @@ class LogWrapper:
         cls._validate_string("tag", tag)
         cls._validate_string("text", text)
 
-        timestamp = datetime.now().isoformat(timespec="seconds")
+        now = cls._now()
+        timestamp = now.isoformat(timespec="seconds")
         safe_text = cls._single_line(text)
         line = f"{timestamp} {level.value.upper()} [{tag}] {safe_text}"
+        log_path = cls._daily_log_path(cls._base_log_path, now.date().isoformat())
 
         try:
-            cls._log_path.parent.mkdir(parents=True, exist_ok=True)
-            with cls._log_path.open("a", encoding="utf-8") as log_file:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as log_file:
                 log_file.write(line + "\n")
         except OSError as exc:
-            raise RuntimeError(f"日志写入失败：{cls._log_path}：{exc}") from exc
+            raise RuntimeError(f"日志写入失败：{log_path}：{exc}") from exc
 
         if cls._should_print_to_terminal(level):
             print(line, file=sys.stderr)
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now()
+
+    @staticmethod
+    def _daily_log_path(base_log_path: Path, date_text: str) -> Path:
+        return base_log_path.with_name(f"{base_log_path.stem}-{date_text}{base_log_path.suffix}")
 
     @classmethod
     def _should_print_to_terminal(cls, level: LogLevel) -> bool:
