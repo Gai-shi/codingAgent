@@ -15,9 +15,11 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Sequence
+from typing import TextIO, Sequence
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -70,6 +72,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Path added to PYTHONPATH when launching ai_job.",
     )
     parser.add_argument("--timeout-seconds", type=int, default=3600)
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Refresh the single-line running status every N seconds.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the single-line running status.",
+    )
     args = parser.parse_args(argv)
 
     output = Path(args.output).expanduser().resolve()
@@ -100,16 +113,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_root = str(Path(args.ai_job_source_root).expanduser().resolve())
     env["PYTHONPATH"] = source_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
 
-    completed = subprocess.run(
+    completed = _run_command_with_progress(
         cmd,
         cwd=source_root,
         env=env,
-        input=stdin_text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=args.timeout_seconds,
-        check=False,
+        stdin_text=stdin_text,
+        timeout_seconds=args.timeout_seconds,
+        progress_interval_seconds=args.progress_interval_seconds,
+        show_progress=not args.no_progress,
     )
 
     (output / "ai_job_stdout.txt").write_text(completed.stdout, encoding="utf-8")
@@ -133,6 +144,134 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _flatten_for_line_cli(text: str) -> str:
     """ai_job currently reads one prompt with input(), so each turn must be one line."""
     return text.replace("\\", "\\\\").replace("\r\n", "\n").replace("\n", "\\n")
+
+
+def _run_command_with_progress(
+    cmd: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    stdin_text: str,
+    timeout_seconds: int,
+    progress_interval_seconds: float,
+    show_progress: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess while refreshing one terminal status line in-place."""
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    started_at = time.monotonic()
+    result_box: dict[str, object] = {}
+
+    def communicate() -> None:
+        try:
+            stdout, stderr = process.communicate(input=stdin_text)
+            result_box["completed"] = subprocess.CompletedProcess(
+                args=cmd,
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the main thread.
+            result_box["exception"] = exc
+
+    worker = threading.Thread(target=communicate, daemon=True)
+    worker.start()
+    last_rendered_second = -1
+    try:
+        while worker.is_alive():
+            elapsed_seconds = time.monotonic() - started_at
+            if elapsed_seconds >= timeout_seconds:
+                process.kill()
+                worker.join()
+                _finish_progress_line(
+                    show_progress=show_progress,
+                    status="运行超时，已终止",
+                    elapsed_seconds=elapsed_seconds,
+                    stream=sys.stderr,
+                )
+                completed = result_box.get("completed")
+                if isinstance(completed, subprocess.CompletedProcess):
+                    raise subprocess.TimeoutExpired(
+                        cmd=cmd,
+                        timeout=timeout_seconds,
+                        output=completed.stdout,
+                        stderr=completed.stderr,
+                    )
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout_seconds)
+
+            rendered_second = int(elapsed_seconds)
+            if rendered_second != last_rendered_second:
+                _render_progress_line(
+                    show_progress=show_progress,
+                    elapsed_seconds=elapsed_seconds,
+                    stream=sys.stderr,
+                )
+                last_rendered_second = rendered_second
+            time.sleep(max(0.1, progress_interval_seconds))
+    except KeyboardInterrupt:
+        process.kill()
+        worker.join()
+        _finish_progress_line(
+            show_progress=show_progress,
+            status="已中断，子进程已终止",
+            elapsed_seconds=time.monotonic() - started_at,
+            stream=sys.stderr,
+        )
+        raise
+
+    worker.join()
+    elapsed_seconds = time.monotonic() - started_at
+    _finish_progress_line(
+        show_progress=show_progress,
+        status="运行结束",
+        elapsed_seconds=elapsed_seconds,
+        stream=sys.stderr,
+    )
+    if "exception" in result_box:
+        raise result_box["exception"]  # type: ignore[misc]
+
+    completed = result_box.get("completed")
+    if not isinstance(completed, subprocess.CompletedProcess):
+        raise RuntimeError("ai_job subprocess finished without a captured result")
+    return completed
+
+
+def _render_progress_line(*, show_progress: bool, elapsed_seconds: float, stream: TextIO) -> None:
+    if not show_progress:
+        return
+    stream.write(f"\r\033[K正在运行中...已运行{_format_elapsed(elapsed_seconds)}")
+    stream.flush()
+
+
+def _finish_progress_line(
+    *,
+    show_progress: bool,
+    status: str,
+    elapsed_seconds: float,
+    stream: TextIO,
+) -> None:
+    if not show_progress:
+        return
+    stream.write(f"\r\033[K{status}，耗时{_format_elapsed(elapsed_seconds)}\n")
+    stream.flush()
+
+
+def _format_elapsed(elapsed_seconds: float) -> str:
+    total_seconds = max(0, int(elapsed_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}小时{minutes}分{seconds}秒"
+    if minutes:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
 
 
 if __name__ == "__main__":
