@@ -117,7 +117,7 @@ CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理�
 
 ```text
 2026-08-03T20:10:00 DEBUG [trace] round=<轮次>
-2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool=<工具名>
+2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool_call=<当前序号>/<总数> tool=<工具名> path=<路径，如有>
 ```
 
 无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，日志都会写入日志文件。

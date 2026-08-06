@@ -8,7 +8,7 @@ from ..communication import MessageHistory, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
-from ..tools import ToolExecutor, ToolRegistry
+from ..tools import ToolCall, ToolExecutor, ToolRegistry
 
 
 TRACE_TAG = "trace"
@@ -50,8 +50,17 @@ class AgentRunner:
                     raise RuntimeError("LLM 最终响应缺少文本 content")
                 return assistant_message.content
 
-            for tool_call in assistant_message.tool_calls:
-                LogWrapper.debug(TRACE_TAG, f"round={round_number} tool={tool_call.name}")
+            tool_call_count = len(assistant_message.tool_calls)
+            for tool_call_index, tool_call in enumerate(assistant_message.tool_calls, start=1):
+                LogWrapper.debug(
+                    TRACE_TAG,
+                    self._tool_call_log_line(
+                        round_number=round_number,
+                        tool_call_index=tool_call_index,
+                        tool_call_count=tool_call_count,
+                        tool_call=tool_call,
+                    ),
+                )
                 SessionRecorder.record_json(f"ToolCall {tool_call.name}", asdict(tool_call))
                 tool_content = self._tool_executor.execute(tool_call)
                 history.append(
@@ -63,3 +72,20 @@ class AgentRunner:
                 SessionRecorder.record_text(f"ToolResult {tool_call.name}", tool_content)
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
+
+    @staticmethod
+    def _tool_call_log_line(
+        round_number: int,
+        tool_call_index: int,
+        tool_call_count: int,
+        tool_call: ToolCall,
+    ) -> str:
+        parts = [
+            f"round={round_number}",
+            f"tool_call={tool_call_index}/{tool_call_count}",
+            f"tool={tool_call.name}",
+        ]
+        path = tool_call.arguments.get("path")
+        if isinstance(path, str):
+            parts.append(f"path={path}")
+        return " ".join(parts)
