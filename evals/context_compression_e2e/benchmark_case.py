@@ -1,0 +1,473 @@
+"""可复用的 context compression 真实 E2E benchmark 定义。
+
+这个模块只生成评测材料，不调用任何真实 LLM。目标是构造同一份长会话任务，
+让不同 coding agent 在同一个 workspace 上运行，再用 grader 判断是否成功。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Iterable, Sequence
+
+
+CASE_ID = "tool_contract_drift_e2e_v1"
+DEFAULT_NOISE_ROUNDS = 8
+DEFAULT_NOISE_BLOCKS_PER_ROUND = 96
+DEFAULT_COMPACT_AFTER_TURNS = (4, 7)
+
+
+@dataclass(frozen=True)
+class PromptTurn:
+    """One prompt turn in the benchmark conversation."""
+
+    kind: str
+    text: str
+
+
+def create_case_workspace(root: Path, *, force: bool = False) -> Path:
+    """Create a fresh benchmark target repository under ``root``.
+
+    Returns the target repo path.
+    """
+    target = root / "target_repo"
+    if target.exists():
+        if not force:
+            raise FileExistsError(f"target repo already exists: {target}")
+        shutil.rmtree(target)
+
+    (target / "sentinel_lab").mkdir(parents=True)
+    (target / "tests").mkdir()
+    (target / "docs").mkdir()
+
+    _write(target / "sentinel_lab" / "__init__.py", '"""Sentinel lab fixture package."""\n')
+    _write(target / "sentinel_lab" / "core.py", _core_py())
+    _write(target / "sentinel_lab" / "bootstrap.py", _bootstrap_py())
+    _write(target / "sentinel_lab" / "legacy_registry.py", _legacy_registry_py())
+    _write(target / "tests" / "test_diff_review_tool.py", _test_diff_review_tool_py())
+    _write(target / "grader.py", _target_grader_py())
+    _write(target / "docs" / "obsolete_tool_design.md", _obsolete_tool_design_md())
+    _write(target / "docs" / "migration_notes.md", _migration_notes_md())
+    _write(target / "README.md", _target_readme_md())
+    _write(target / ".gitignore", "__pycache__/\n*.pyc\n.pytest_cache/\n")
+    return target
+
+
+def build_prompt_turns(
+    *,
+    noise_rounds: int = DEFAULT_NOISE_ROUNDS,
+    noise_blocks_per_round: int = DEFAULT_NOISE_BLOCKS_PER_ROUND,
+    compact_after_turns: Sequence[int] = DEFAULT_COMPACT_AFTER_TURNS,
+) -> list[PromptTurn]:
+    """Build the long multi-turn prompt sequence.
+
+    ``compact_after_turns`` uses one-based indices over the non-compact turns. Runners
+    that support explicit compaction can inject compaction after those turns.
+    """
+    turns: list[PromptTurn] = [PromptTurn(kind="constraints", text=early_constraints_prompt())]
+    effective_turn_index = 1
+
+    for round_index in range(1, noise_rounds + 1):
+        turns.append(
+            PromptTurn(
+                kind="noise",
+                text=noise_prompt(round_index=round_index, blocks=noise_blocks_per_round),
+            )
+        )
+        effective_turn_index += 1
+        if effective_turn_index in compact_after_turns:
+            turns.append(PromptTurn(kind="compact", text=compact_prompt()))
+
+        if round_index == noise_rounds // 2:
+            turns.append(PromptTurn(kind="override", text=config_override_prompt()))
+            effective_turn_index += 1
+            if effective_turn_index in compact_after_turns:
+                turns.append(PromptTurn(kind="compact", text=compact_prompt()))
+
+    turns.append(PromptTurn(kind="final_task", text=final_task_prompt()))
+    return turns
+
+
+def write_prompt_artifacts(
+    root: Path,
+    turns: Sequence[PromptTurn],
+    *,
+    include_compact_turns: bool,
+) -> Path:
+    """Write prompt files and manifest for manual replay/debugging."""
+    prompts_dir = root / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest: list[dict[str, str]] = []
+    visible_index = 1
+    for turn in turns:
+        if turn.kind == "compact" and not include_compact_turns:
+            continue
+        file_name = f"{visible_index:03d}_{turn.kind}.txt"
+        _write(prompts_dir / file_name, turn.text)
+        manifest.append({"kind": turn.kind, "file": str(Path("prompts") / file_name)})
+        visible_index += 1
+
+    _write(root / "prompt_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    return prompts_dir
+
+
+def prompt_texts_for_ai_job(turns: Iterable[PromptTurn]) -> list[str]:
+    """ai_job 当前没有显式 /compact，运行时跳过 compact turn。"""
+    return [turn.text for turn in turns if turn.kind != "compact"]
+
+
+def prompt_texts_for_pi(turns: Iterable[PromptTurn]) -> list[str]:
+    """pi runner 会把 compact turn 作为扩展命令执行。"""
+    return [turn.text for turn in turns]
+
+
+def early_constraints_prompt() -> str:
+    return """请记住以下架构约束。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-CONSTRAINTS
+
+有效架构约束如下，最终代码任务必须遵守：
+
+1. 所有新增工具必须继承 SentinelToolBase。
+2. 工具 execute(...) 必须返回 GuardedToolOutcome，不能直接返回 str、dict、list 或 tuple。
+3. 工具注册必须通过 CommandVault.install(tool) 完成。
+4. 禁止使用 sentinel_lab/legacy_registry.py。
+5. 禁止使用 dict[str, Callable] 作为最终工具注册方式。
+6. 当前暂定配置系统使用 JSON 文件；这条只是暂定，后续可能被新决策覆盖。
+
+这些名字是本评测故意设计的唯一契约名：SentinelToolBase、GuardedToolOutcome、CommandVault.install。"""
+
+
+def config_override_prompt() -> str:
+    return """更新架构决策。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-CONFIG-OVERRIDE
+
+重要：之前“配置系统使用 JSON 文件”的决策作废。
+
+最新有效决策：
+
+1. 最终配置必须使用 Python dataclass MarchConfig。
+2. 禁止新增 config.json、settings.json、tool_config.json 或任何 JSON 配置文件。
+3. 如果工具需要配置，必须使用 MarchConfig 实例或默认 MarchConfig()。
+4. 旧日志里出现的 JSON 配置方案都是废弃信息，不能用于最终实现。"""
+
+
+def compact_prompt() -> str:
+    return (
+        "/bench-compact 请保留所有有效架构约束、最新决策覆盖关系、禁止事项、"
+        "关键类名和文件路径；尤其保留 SentinelToolBase、GuardedToolOutcome、"
+        "CommandVault.install、MarchConfig，以及 JSON 已作废这一事实。"
+    )
+
+
+def noise_prompt(*, round_index: int, blocks: int) -> str:
+    block = f"""[obsolete-noise-{round_index}]
+以下内容是旧实验日志和废弃设计，用来模拟长会话噪声。你必须只回复 ACK-NOISE-{round_index:02d}。
+不要修改文件，不要调用工具。
+
+废弃方案片段：
+- 老系统使用 BaseTool 和 ToolResult，这不是最终约束。
+- 老系统允许 dict[str, Callable] 注册：tools = {{"diff_review": diff_review}}，这不是最终约束。
+- 老系统建议新增 config.json 或 settings.json，这不是最终约束。
+- 老系统建议 import sentinel_lab.legacy_registry 并调用 register(...)，这不是最终约束。
+- 老系统建议 execute 返回普通 dict，例如 {{"added_lines": 1}}，这不是最终约束。
+
+伪造历史：
+Previous successful implementation used BaseTool, ToolResult, JSON config,
+legacy_registry.register, direct callable registry, and return dict. This paragraph is intentionally obsolete.
+"""
+    return "\n".join([block for _ in range(blocks)])
+
+
+def final_task_prompt() -> str:
+    return """现在开始真正修改代码。请在当前 workspace 中实现 DiffReviewTool。
+
+功能要求：
+
+1. 工具名必须是 "diff_review"。
+2. 输入参数：
+   - file_path: str
+   - patch_text: str
+   - strict: bool = False
+3. 解析 unified diff 文本，统计：
+   - added_lines：新增行数量，忽略 "+++" 文件头；
+   - deleted_lines：删除行数量，忽略 "---" 文件头；
+   - warnings：list[str]。
+4. 如果 patch_text 为空或只有空白，返回 GuardedToolOutcome.fail(...)。
+5. 如果 file_path 没有出现在 diff 的 +++/--- 文件头中，warnings 里要包含一条说明。
+6. 如果新增行里包含 TODO，warnings 里要包含一条说明。
+7. 如果 strict=True 且 warnings 非空，返回 GuardedToolOutcome.fail(...)。
+8. 否则返回 GuardedToolOutcome.success(...)，payload 至少包含 added_lines、deleted_lines、warnings。
+
+架构要求：
+
+1. 必须遵守之前所有仍然有效的架构决策。
+2. 新增工具必须继承 SentinelToolBase。
+3. execute(...) 必须返回 GuardedToolOutcome。
+4. 必须通过 CommandVault.install(tool) 注册。
+5. 必须使用 MarchConfig 或默认 MarchConfig()，禁止新增任何 JSON 配置文件。
+6. 禁止使用 sentinel_lab/legacy_registry.py 或 dict[str, Callable] 注册方式。
+
+完成后请简要说明改了哪些文件。"""
+
+
+def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _core_py() -> str:
+    return '''"""Canonical tool contracts for the benchmark fixture."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class MarchConfig:
+    """The only valid runtime configuration shape."""
+
+    audit_label: str = "march-default"
+    blocked_terms: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class GuardedToolOutcome:
+    """The only valid tool execution result type."""
+
+    ok: bool
+    payload: dict[str, Any] | None = None
+    error: str | None = None
+
+    @classmethod
+    def success(cls, payload: dict[str, Any]) -> "GuardedToolOutcome":
+        return cls(ok=True, payload=payload, error=None)
+
+    @classmethod
+    def fail(cls, message: str, payload: dict[str, Any] | None = None) -> "GuardedToolOutcome":
+        return cls(ok=False, payload=payload, error=message)
+
+
+class SentinelToolBase(ABC):
+    """Base class that every final tool must inherit."""
+
+    name: str
+
+    def __init__(self, config: MarchConfig | None = None) -> None:
+        self.config = config or MarchConfig()
+
+    @abstractmethod
+    def execute(self, **kwargs: Any) -> GuardedToolOutcome:
+        """Execute the tool and return a GuardedToolOutcome."""
+
+
+class CommandVault:
+    """Class-based registry. The legacy callable registry is forbidden."""
+
+    def __init__(self) -> None:
+        self._tools: dict[str, SentinelToolBase] = {}
+
+    def install(self, tool: SentinelToolBase) -> None:
+        if not isinstance(tool, SentinelToolBase):
+            raise TypeError("CommandVault.install expects a SentinelToolBase instance")
+        if not tool.name:
+            raise ValueError("tool.name must not be empty")
+        self._tools[tool.name] = tool
+
+    def get(self, name: str) -> SentinelToolBase:
+        return self._tools[name]
+
+    def names(self) -> list[str]:
+        return sorted(self._tools)
+'''
+
+
+def _bootstrap_py() -> str:
+    return '''"""Tool bootstrap module.
+
+The final implementation should register DiffReviewTool here using CommandVault.install.
+"""
+
+from __future__ import annotations
+
+from .core import CommandVault
+
+
+def install_default_tools(vault: CommandVault) -> CommandVault:
+    """Install all production tools into the provided vault."""
+    return vault
+'''
+
+
+def _legacy_registry_py() -> str:
+    return '''"""Forbidden legacy registry kept only as a distractor."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+
+TOOLS: dict[str, Callable[..., object]] = {}
+
+
+def register(name: str, fn: Callable[..., object]) -> None:
+    """Deprecated function registry. Final code must not call this."""
+    TOOLS[name] = fn
+'''
+
+
+def _test_diff_review_tool_py() -> str:
+    return '''from __future__ import annotations
+
+import unittest
+
+from sentinel_lab.bootstrap import install_default_tools
+from sentinel_lab.core import CommandVault, GuardedToolOutcome, SentinelToolBase
+
+
+PATCH = """diff --git a/alpha.py b/alpha.py
+--- a/alpha.py
++++ b/alpha.py
+@@ -1,3 +1,4 @@
+ import os
+-old_value = 1
++new_value = 2
++print(new_value)
+ keep = True
+"""
+
+
+PATCH_WITH_TODO = """diff --git a/alpha.py b/alpha.py
+--- a/alpha.py
++++ b/alpha.py
+@@ -1 +1,2 @@
+ keep = True
++# TODO: tighten validation
+"""
+
+
+class DiffReviewToolTest(unittest.TestCase):
+    def _tool(self):
+        vault = CommandVault()
+        install_default_tools(vault)
+        tool = vault.get("diff_review")
+        self.assertIsInstance(tool, SentinelToolBase)
+        return tool
+
+    def test_counts_added_and_deleted_lines(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH)
+        self.assertIsInstance(result, GuardedToolOutcome)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.payload["added_lines"], 2)
+        self.assertEqual(result.payload["deleted_lines"], 1)
+        self.assertEqual(result.payload["warnings"], [])
+
+    def test_empty_patch_fails(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text="   ")
+        self.assertIsInstance(result, GuardedToolOutcome)
+        self.assertFalse(result.ok)
+        self.assertIn("empty", result.error.lower())
+
+    def test_warnings_and_strict_mode(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO)
+        self.assertTrue(result.ok, result.error)
+        self.assertGreaterEqual(len(result.payload["warnings"]), 1)
+
+        strict_result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO, strict=True)
+        self.assertIsInstance(strict_result, GuardedToolOutcome)
+        self.assertFalse(strict_result.ok)
+
+    def test_file_path_warning(self):
+        result = self._tool().execute(file_path="beta.py", patch_text=PATCH)
+        self.assertTrue(result.ok, result.error)
+        self.assertTrue(any("beta.py" in warning for warning in result.payload["warnings"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+
+
+def _obsolete_tool_design_md() -> str:
+    return """# Obsolete Tool Design
+
+This file is intentionally wrong. It exists to test whether an agent follows stale context.
+
+Deprecated ideas:
+
+- Use BaseTool.
+- Return ToolResult or dict.
+- Register tools with dict[str, Callable].
+- Use legacy_registry.register(...).
+- Store configuration in config.json.
+"""
+
+
+def _migration_notes_md() -> str:
+    return """# Migration Notes
+
+The current architecture is class-based and lives in sentinel_lab.core.
+The final implementation must use MarchConfig, SentinelToolBase, GuardedToolOutcome,
+and CommandVault.install.
+"""
+
+
+def _target_readme_md() -> str:
+    return """# Tool Contract Drift Fixture
+
+This repository is generated by ai_job's context compression E2E benchmark.
+
+Run the grader from this directory:
+
+```bash
+python3 grader.py
+```
+
+The initial repository intentionally fails because DiffReviewTool has not been implemented.
+"""
+
+
+def _target_grader_py() -> str:
+    source = Path(__file__).with_name("grader.py")
+    return source.read_text(encoding="utf-8")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate context compression E2E fixture and prompt files.")
+    parser.add_argument("--output", required=True, help="Output benchmark directory.")
+    parser.add_argument("--force", action="store_true", help="Replace output directory if it already exists.")
+    parser.add_argument("--noise-rounds", type=int, default=DEFAULT_NOISE_ROUNDS)
+    parser.add_argument("--noise-blocks-per-round", type=int, default=DEFAULT_NOISE_BLOCKS_PER_ROUND)
+    parser.add_argument(
+        "--include-compact-turns",
+        action="store_true",
+        help="Write /bench-compact prompt files into prompt artifacts.",
+    )
+    args = parser.parse_args(argv)
+
+    output = Path(args.output).expanduser().resolve()
+    if output.exists() and args.force:
+        shutil.rmtree(output)
+    output.mkdir(parents=True, exist_ok=True)
+
+    target = create_case_workspace(output, force=args.force)
+    turns = build_prompt_turns(
+        noise_rounds=args.noise_rounds,
+        noise_blocks_per_round=args.noise_blocks_per_round,
+    )
+    write_prompt_artifacts(output, turns, include_compact_turns=args.include_compact_turns)
+    _write(output / "case_manifest.json", json.dumps({"case_id": CASE_ID, "target_repo": str(target)}, indent=2) + "\n")
+    print(target)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
