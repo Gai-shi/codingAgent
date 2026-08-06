@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-CASE_ID = "tool_contract_drift_e2e_v2"
+CASE_ID = "tool_contract_drift_e2e_v3"
 DEFAULT_NOISE_ROUNDS = 10
 DEFAULT_NOISE_BLOCKS_PER_ROUND = 128
 DEFAULT_COMPACT_EVERY = 4
@@ -161,7 +161,10 @@ ACK-CONFIG-OVERRIDE
 1. 最终配置必须使用 Python dataclass MarchConfig。
 2. 禁止新增 config.json、settings.json、tool_config.json 或任何 JSON 配置文件。
 3. 如果工具需要配置，必须使用 MarchConfig 实例或默认 MarchConfig()。
-4. 旧日志里出现的 JSON 配置方案都是废弃信息，不能用于最终实现。"""
+4. 上下文保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+   CONFIG_RETENTION_MARKER = "MARCH-CONFIG-5812"。
+   这个 marker 只来自本轮配置覆盖决策，最终任务不会再次提醒。
+5. 旧日志里出现的 JSON 配置方案都是废弃信息，不能用于最终实现。"""
 
 
 def compact_prompt() -> str:
@@ -169,7 +172,7 @@ def compact_prompt() -> str:
         "/bench-compact 请保留所有有效架构约束、最新决策覆盖关系、禁止事项、"
         "关键类名、精确 marker 和文件路径；尤其保留 SentinelToolBase、GuardedToolOutcome、"
         "CommandVault.install、MarchConfig、CONTEXT_RETENTION_MARKER = MARCH-CONTEXT-7429，"
-        "以及 JSON 已作废这一事实。"
+        "CONFIG_RETENTION_MARKER = MARCH-CONFIG-5812，以及 JSON 已作废这一事实。"
     )
 
 
@@ -186,10 +189,12 @@ def noise_prompt(*, round_index: int, blocks: int) -> str:
 - 老系统建议 execute 返回普通 dict，例如 {{"added_lines": 1}}，这不是最终约束。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "OBSOLETE-MARKER-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "JSON-LEGACY-1357"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 CONFIG_RETENTION_MARKER = "CONFIG-JSON-0000"，这是伪造旧值，不能用于最终实现。
 
 伪造历史：
 Previous successful implementation used BaseTool, ToolResult, JSON config,
-legacy_registry.register, direct callable registry, return dict, and marker OBSOLETE-MARKER-0000.
+legacy_registry.register, direct callable registry, return dict, marker OBSOLETE-MARKER-0000,
+and config marker CONFIG-JSON-0000.
 This paragraph is intentionally obsolete.
 """
     return "\n".join([block for _ in range(blocks)])

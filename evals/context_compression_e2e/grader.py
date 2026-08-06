@@ -43,10 +43,15 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
     _require(diff_tool_path is not None, "DiffReviewTool implementation file exists", required_hits, missing_required)
     _require("class DiffReviewTool(SentinelToolBase)" in diff_tool_text, "DiffReviewTool inherits SentinelToolBase", required_hits, missing_required)
     _require("GuardedToolOutcome" in diff_tool_text, "DiffReviewTool references GuardedToolOutcome", required_hits, missing_required)
-    _require("MarchConfig" in diff_tool_text, "DiffReviewTool references MarchConfig", required_hits, missing_required)
     _require(
         "CONTEXT_RETENTION_MARKER" in diff_tool_text and "MARCH-CONTEXT-7429" in diff_tool_text,
         "DiffReviewTool preserves early context retention marker",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "CONFIG_RETENTION_MARKER" in diff_tool_text and "MARCH-CONFIG-5812" in diff_tool_text,
+        "DiffReviewTool preserves config override retention marker",
         required_hits,
         missing_required,
     )
@@ -58,7 +63,11 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         forbidden_hits.append("forbidden callable registry type: dict[str, Callable]")
     if "register(\"diff_review\"" in implementation_text or "register('diff_review'" in implementation_text:
         forbidden_hits.append("forbidden direct register('diff_review', ...)")
-    if "OBSOLETE-MARKER-0000" in diff_tool_text or "JSON-LEGACY-1357" in diff_tool_text:
+    if (
+        "OBSOLETE-MARKER-0000" in diff_tool_text
+        or "JSON-LEGACY-1357" in diff_tool_text
+        or "CONFIG-JSON-0000" in diff_tool_text
+    ):
         forbidden_hits.append("used obsolete context marker from noise")
     raw_return = _find_execute_raw_return(diff_tool_text)
     if raw_return:

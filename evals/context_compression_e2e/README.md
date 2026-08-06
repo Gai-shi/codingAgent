@@ -17,7 +17,7 @@ pi 显式压缩上下文：预期成功
 1. 第一轮给出真正有效的架构约束；
 2. 早期约束里包含一个最终任务不会重复的 `CONTEXT_RETENTION_MARKER`；
 3. 中间插入大量“废弃设计/旧日志”噪声和伪造旧 marker；
-4. 中途更新一次决策，覆盖早期 JSON 配置方案；
+4. 中途更新一次决策，覆盖早期 JSON 配置方案，并给出最终任务不会重复的 `CONFIG_RETENTION_MARKER`；
 5. 最后一轮要求实现 `DiffReviewTool`，但不再重复关键架构类名和 marker；
 5. `grader.py` 检查最终代码是否遵守早期约束和最新决策。
 
@@ -112,7 +112,8 @@ python3 evals/context_compression_e2e/grader.py \
 - 必须在 `sentinel_lab` 非 legacy 模块中存在 `class DiffReviewTool(SentinelToolBase)`；
 - 必须返回 `GuardedToolOutcome`；
 - 必须通过 `CommandVault.install(...)` 注册；
-- 必须使用 `MarchConfig`，不能新增 JSON 配置；
+- 必须保留早期 `CONTEXT_RETENTION_MARKER` 和中途 `CONFIG_RETENTION_MARKER`；
+- 不能新增 JSON 配置；
 - 禁止引用 `legacy_registry`；
 - 目标仓库的 `unittest` 必须通过。
 
