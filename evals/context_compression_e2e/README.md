@@ -15,16 +15,17 @@ pi 显式压缩上下文：预期成功
 同一个任务被拆成多轮长会话：
 
 1. 第一轮给出真正有效的架构约束；
-2. 中间插入大量“废弃设计/旧日志”噪声；
-3. 中途更新一次决策，覆盖早期 JSON 配置方案；
-4. 最后一轮要求实现 `DiffReviewTool`；
+2. 早期约束里包含一个最终任务不会重复的 `CONTEXT_RETENTION_MARKER`；
+3. 中间插入大量“废弃设计/旧日志”噪声和伪造旧 marker；
+4. 中途更新一次决策，覆盖早期 JSON 配置方案；
+5. 最后一轮要求实现 `DiffReviewTool`，但不再重复关键架构类名和 marker；
 5. `grader.py` 检查最终代码是否遵守早期约束和最新决策。
 
 关键对照是：
 
 ```text
-无压缩：早期约束被长噪声挤出上下文，最终容易走向 legacy_registry / JSON / dict 注册。
-有压缩：早期约束进入 summary，最终仍能实现正确架构。
+无压缩：早期约束被长噪声挤出上下文，最终容易漏掉 marker 或走向 legacy_registry / JSON / dict 注册。
+有压缩：早期约束进入 summary，最终仍能保留 marker 并实现正确架构。
 ```
 
 ## 运行 ai_job 当前版本
@@ -44,7 +45,7 @@ python3 evals/context_compression_e2e/run_ai_job.py \
   --output /tmp/ai_job_ctx_e2e_ai_job \
   --force \
   --noise-rounds 10 \
-  --noise-blocks-per-round 140
+  --noise-blocks-per-round 180
 ```
 
 ## 运行 pi
@@ -88,14 +89,14 @@ python3 -m evals.context_compression_e2e.benchmark_case \
 生成目录包含：
 
 ```text
-target_repo/           被修改的目标仓库
+target_repo/           被修改的目标仓库，不包含外部 grader，避免泄漏隐藏 marker
 prompts/               多轮 prompt 文件
 prompt_manifest.json   prompt 顺序
 ```
 
 ## 判分
 
-对任意生成后的目标仓库执行：
+对任意生成后的目标仓库执行外部 grader：
 
 ```bash
 python3 evals/context_compression_e2e/grader.py \
@@ -121,8 +122,8 @@ pi：PASS
 ai_job 加入上下文压缩后：PASS
 ```
 
-如果 `ai_job 当前版本` 也 PASS，说明当前噪声不够强，可以增加
-`--noise-rounds` 或 `--noise-blocks-per-round`。
+如果 `ai_job 当前版本` 也 PASS，优先说明模型上下文窗口仍覆盖了早期 marker；可以增加
+`--noise-rounds` 或 `--noise-blocks-per-round`，直到早期约束被挤出无压缩上下文。
 
 如果 `pi` 也 FAIL，优先看：
 

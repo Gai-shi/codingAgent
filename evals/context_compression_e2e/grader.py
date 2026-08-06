@@ -44,6 +44,12 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
     _require("class DiffReviewTool(SentinelToolBase)" in diff_tool_text, "DiffReviewTool inherits SentinelToolBase", required_hits, missing_required)
     _require("GuardedToolOutcome" in diff_tool_text, "DiffReviewTool references GuardedToolOutcome", required_hits, missing_required)
     _require("MarchConfig" in diff_tool_text, "DiffReviewTool references MarchConfig", required_hits, missing_required)
+    _require(
+        "CONTEXT_RETENTION_MARKER" in diff_tool_text and "MARCH-CONTEXT-7429" in diff_tool_text,
+        "DiffReviewTool preserves early context retention marker",
+        required_hits,
+        missing_required,
+    )
     _require(".install(" in bootstrap_text and "DiffReviewTool" in bootstrap_text, "bootstrap registers via CommandVault.install", required_hits, missing_required)
 
     if "legacy_registry" in implementation_text:
@@ -52,6 +58,8 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         forbidden_hits.append("forbidden callable registry type: dict[str, Callable]")
     if "register(\"diff_review\"" in implementation_text or "register('diff_review'" in implementation_text:
         forbidden_hits.append("forbidden direct register('diff_review', ...)")
+    if "OBSOLETE-MARKER-0000" in diff_tool_text or "JSON-LEGACY-1357" in diff_tool_text:
+        forbidden_hits.append("used obsolete context marker from noise")
     if "return {" in diff_tool_text or "return dict(" in diff_tool_text:
         forbidden_hits.append("execute appears to return raw dict")
     if "return \"" in diff_tool_text or "return '" in diff_tool_text:
