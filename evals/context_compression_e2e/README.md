@@ -203,6 +203,8 @@ ai_job 加入上下文压缩后：PASS
 如果 `grade` 是 FAIL，先看 `result_ai_job.json` 里的 `diagnostics`：
 
 - `context_length_exceeded_count > 0`：说明无压缩历史已经超过真实模型窗口；
+- `socket_timeout_count > 0` 或 `python_traceback_count > 0`：说明 ai_job 进程在后续请求里发生未恢复异常，本次失败不是 grader 误判；
+- `final_task_user_message_count > 0` 且 `apply_patch_tool_call_count == 0`：说明最终任务已经进入会话，但模型没有成功走到代码修改；
 - `apply_patch_begin_patch_format_error_count > 0`：说明模型把 Codex 风格 `*** Begin Patch` 误传给 ai_job 的 git-diff-only `apply_patch`；
 - `apply_patch_hunk_count_error_count > 0`：说明模型生成的 git diff hunk 行数不一致；
 - `model_permission_error_count > 0`：说明本次还混入了 provider/model 权限问题，不能只按代码能力解释。
