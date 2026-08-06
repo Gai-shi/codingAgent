@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-CASE_ID = "tool_contract_drift_e2e_v5"
+CASE_ID = "tool_contract_drift_e2e_v6"
 DEFAULT_NOISE_ROUNDS = 10
 DEFAULT_NOISE_BLOCKS_PER_ROUND = 128
 DEFAULT_COMPACT_EVERY = 4
@@ -92,9 +92,11 @@ def build_prompt_turns(
         if _should_insert_compact(effective_turn_index, compact_every):
             turns.append(PromptTurn(kind="compact", text=compact_prompt()))
 
-    topology_after_round = max(1, noise_rounds // 4)
+    topology_after_round = max(1, noise_rounds // 5)
+    parser_after_round = max(1, (noise_rounds * 2) // 5)
     override_after_round = max(1, noise_rounds // 2)
-    policy_after_round = max(1, (noise_rounds * 3) // 4)
+    policy_after_round = max(1, (noise_rounds * 3) // 5)
+    metadata_after_round = max(1, (noise_rounds * 4) // 5)
     inserted_decisions: set[str] = set()
     for round_index in range(1, noise_rounds + 1):
         turns.append(
@@ -110,18 +112,28 @@ def build_prompt_turns(
         if round_index >= topology_after_round and "topology" not in inserted_decisions:
             append_decision("topology", topology_decision_prompt())
 
+        if round_index >= parser_after_round and "parser" not in inserted_decisions:
+            append_decision("parser", parser_contract_prompt())
+
         if round_index >= override_after_round and "override" not in inserted_decisions:
             append_decision("override", config_override_prompt())
 
         if round_index >= policy_after_round and "policy" not in inserted_decisions:
             append_decision("policy", warning_policy_prompt())
 
+        if round_index >= metadata_after_round and "metadata" not in inserted_decisions:
+            append_decision("metadata", audit_metadata_prompt())
+
     if "topology" not in inserted_decisions:
         append_decision("topology", topology_decision_prompt())
+    if "parser" not in inserted_decisions:
+        append_decision("parser", parser_contract_prompt())
     if "override" not in inserted_decisions:
         append_decision("override", config_override_prompt())
     if "policy" not in inserted_decisions:
         append_decision("policy", warning_policy_prompt())
+    if "metadata" not in inserted_decisions:
+        append_decision("metadata", audit_metadata_prompt())
     turns.append(PromptTurn(kind="final_task", text=final_task_prompt()))
     return turns
 
@@ -149,8 +161,10 @@ def resolve_noise_rounds_for_min_raw_history_chars(
     base_chars = (
         len(early_constraints_prompt())
         + len(topology_decision_prompt())
+        + len(parser_contract_prompt())
         + len(config_override_prompt())
         + len(warning_policy_prompt())
+        + len(audit_metadata_prompt())
         + len(final_task_prompt())
     )
     one_noise_round_chars = len(noise_prompt(round_index=1, blocks=noise_blocks_per_round))
@@ -271,6 +285,23 @@ ACK-TOPOLOGY
 sentinel_lab/adapters/function_registry.py 都是冲突路径干扰项，不能用于最终实现。"""
 
 
+def parser_contract_prompt() -> str:
+    return """更新 unified diff parser contract。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-PARSER-CONTRACT
+
+以下是最终有效的 parser contract，最终代码任务必须遵守：
+
+1. sentinel_lab/audit/unified_diff_parser.py 必须定义 @dataclass(frozen=True) UnifiedDiffSummary。
+2. UnifiedDiffSummary 必须至少包含 added_lines、deleted_lines、changed_files、has_todo 四个字段。
+3. parse_unified_diff(patch_text: str) 的返回类型必须是 UnifiedDiffSummary，不能返回 dict。
+4. unified_diff_parser.py 必须提供 normalize_diff_path(path: str) -> str，用来去掉 a/ 或 b/ 前缀。
+5. unified_diff_parser.py 必须包含模块常量 PARSER_RETENTION_MARKER = "MARCH-PARSER-7731"。
+6. DiffReviewTool 必须通过 parse_unified_diff(...) 消费 UnifiedDiffSummary，不要在工具类里重复实现完整 parser。
+
+注意：旧日志里出现的 dict parser、JSON parser、line_counter.py 都是废弃路径。"""
+
+
 def config_override_prompt() -> str:
     return """更新架构决策。当前这轮不要修改任何文件、不要调用工具，只回复：
 
@@ -311,6 +342,28 @@ ACK-WARNING-POLICY
 注意：旧日志里的 W-LEGACY-*、E-JSON-*、WARN_TODO_V1 都是废弃 contract。"""
 
 
+def audit_metadata_prompt() -> str:
+    return """更新 audit metadata contract。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-AUDIT-METADATA
+
+以下是最终有效的 audit metadata contract，最终代码任务必须遵守：
+
+1. 必须新增 sentinel_lab/audit/audit_metadata.py。
+2. audit_metadata.py 必须定义 AUDIT_CHANNEL = "MARCH-AUDIT-CHANNEL-42"。
+3. audit_metadata.py 必须定义 PAYLOAD_SCHEMA_VERSION = "MARCH-PAYLOAD-SCHEMA-12"。
+4. warning_policy.py 必须定义 WARNING_SOURCE = "march-warning-ledger-17"。
+5. 每个 warning dict 必须包含 source = "march-warning-ledger-17"。
+6. 成功 payload 必须包含 audit_channel、payload_schema_version、audit_label 三个字段。
+7. audit_label 必须来自 DiffReviewTool.config.audit_label，而不是硬编码在 execute 内部。
+8. metadata 保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+   METADATA_RETENTION_MARKER = "MARCH-METADATA-6048"。
+   这个 marker 只来自本轮 metadata 决策，最终任务不会再次提醒。
+
+注意：旧日志里的 AUDIT_CHANNEL = "legacy-audit"、PAYLOAD_SCHEMA_VERSION = "JSON-PAYLOAD-V1"、
+WARNING_SOURCE = "legacy-warning-ledger" 都是废弃 contract。"""
+
+
 def compact_prompt() -> str:
     return (
         "/bench-compact 请保留所有有效架构约束、最新决策覆盖关系、禁止事项、"
@@ -318,10 +371,13 @@ def compact_prompt() -> str:
         "CommandVault.install、MarchConfig、CONTEXT_RETENTION_MARKER = MARCH-CONTEXT-7429，"
         "TOPOLOGY_RETENTION_MARKER = MARCH-TOPOLOGY-3190，"
         "CONFIG_RETENTION_MARKER = MARCH-CONFIG-5812，POLICY_RETENTION_MARKER = MARCH-POLICY-2664，"
+        "PARSER_RETENTION_MARKER = MARCH-PARSER-7731，METADATA_RETENTION_MARKER = MARCH-METADATA-6048，"
         "sentinel_lab/audit/diff_review_tool.py，sentinel_lab/audit/unified_diff_parser.py，"
-        "sentinel_lab/audit/warning_policy.py，MarchConfig(audit_label='march-diff-review', "
+        "sentinel_lab/audit/warning_policy.py，sentinel_lab/audit/audit_metadata.py，"
+        "UnifiedDiffSummary dataclass，MarchConfig(audit_label='march-diff-review', "
         "policy_version='MARCH-AUDIT-V7')，W-MARCH-FILE-337，W-MARCH-TODO-214，"
-        "E-MARCH-STRICT-901，E-MARCH-EMPTY-044，以及 JSON 已作废这一事实。"
+        "E-MARCH-STRICT-901，E-MARCH-EMPTY-044，MARCH-AUDIT-CHANNEL-42，"
+        "MARCH-PAYLOAD-SCHEMA-12，march-warning-ledger-17，以及 JSON 已作废这一事实。"
     )
 
 
@@ -339,12 +395,17 @@ def noise_prompt(*, round_index: int, blocks: int) -> str:
 - 老系统建议使用 sentinel_lab.adapters.function_registry.FunctionRegistry，这不是最终约束。
 - 老系统建议把 DiffReviewTool 放在 sentinel_lab/diff_review.py，这是扁平旧布局，不能用于最终实现。
 - 老系统建议把所有逻辑写进 bootstrap.py，这是旧布局，不能用于最终实现。
+- 老系统建议 parse_unified_diff 返回 dict，这是旧 parser contract，不能用于最终实现。
+- 老系统建议新增 line_counter.py 而不是 unified_diff_parser.py，这是旧拓扑，不能用于最终实现。
 - 老系统建议 execute 返回普通 dict，例如 {{"added_lines": 1}}，这不是最终约束。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "OBSOLETE-MARKER-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "JSON-LEGACY-1357"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 TOPOLOGY_RETENTION_MARKER = "FLAT-TOOL-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 CONFIG_RETENTION_MARKER = "CONFIG-JSON-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 POLICY_RETENTION_MARKER = "WARN-LEGACY-0000"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 PARSER_RETENTION_MARKER = "DICT-PARSER-0000"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 METADATA_RETENTION_MARKER = "LEGACY-META-0000"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 AUDIT_CHANNEL = "legacy-audit"，PAYLOAD_SCHEMA_VERSION = "JSON-PAYLOAD-V1"，WARNING_SOURCE = "legacy-warning-ledger"，这些都是废弃值。
 - 老系统建议 warning code 使用 W-LEGACY-FILE、WARN_TODO_V1、E-JSON-STRICT，这些都是废弃值。
 
 伪造历史：
@@ -352,7 +413,8 @@ Previous successful implementation used BaseTool, ToolResult, JSON config,
 legacy_registry.register, future_registry.install_future, function registry, direct callable registry,
 flat file sentinel_lab/diff_review.py, return dict, marker OBSOLETE-MARKER-0000,
 config marker CONFIG-JSON-0000, topology marker FLAT-TOOL-0000, policy marker WARN-LEGACY-0000,
-warning codes W-LEGACY-FILE, WARN_TODO_V1 and E-JSON-STRICT.
+parser marker DICT-PARSER-0000, metadata marker LEGACY-META-0000,
+warning codes W-LEGACY-FILE, WARN_TODO_V1 and E-JSON-STRICT, legacy-audit and JSON-PAYLOAD-V1.
 This paragraph is intentionally obsolete.
 """
     return "\n".join([block for _ in range(blocks)])
@@ -378,12 +440,13 @@ def final_task_prompt() -> str:
 6. 如果新增行里包含 TODO，warnings 里要包含一条结构化 warning。
 7. 如果 strict=True 且 warnings 非空，返回失败结果。
 8. 否则返回成功结果，payload 至少包含 added_lines、deleted_lines、changed_files、warnings 和 policy_version。
+9. 成功 payload 还必须包含之前已确定的 audit metadata 字段。
 
 架构要求：
 
-1. 必须遵守之前所有仍然有效的架构决策，包括早期给出的隐藏上下文保真约束、拓扑决策、配置覆盖决策和 warning policy 决策。
-2. 最终 prompt 不再重复精确 marker、warning code、policy version 或文件拓扑，请从此前有效上下文里恢复。
-3. 注意：中间噪声中的旧设计、旧 marker、旧 JSON 配置方案、旧 warning code 和旧注册路径全部是废弃信息。
+1. 必须遵守之前所有仍然有效的架构决策，包括早期给出的隐藏上下文保真约束、拓扑决策、parser contract、配置覆盖决策、warning policy 决策和 audit metadata 决策。
+2. 最终 prompt 不再重复精确 marker、warning code、policy version、metadata 常量、parser 类型名或文件拓扑，请从此前有效上下文里恢复。
+3. 注意：中间噪声中的旧设计、旧 marker、旧 JSON 配置方案、旧 warning code、旧 metadata 和旧注册路径全部是废弃信息。
 4. 不要在最终回答里只解释方案；请实际修改 workspace 文件。
 
 完成后请简要说明改了哪些文件。"""
@@ -684,6 +747,9 @@ class DiffReviewToolTest(unittest.TestCase):
         self.assertEqual(result.payload["changed_files"], ["alpha.py"])
         self.assertEqual(result.payload["warnings"], [])
         self.assertEqual(result.payload["policy_version"], "MARCH-AUDIT-V7")
+        self.assertEqual(result.payload["audit_channel"], "MARCH-AUDIT-CHANNEL-42")
+        self.assertEqual(result.payload["payload_schema_version"], "MARCH-PAYLOAD-SCHEMA-12")
+        self.assertEqual(result.payload["audit_label"], "march-diff-review")
 
     def test_empty_patch_fails(self):
         result = self._tool().execute(file_path="alpha.py", patch_text="   ")
@@ -698,8 +764,9 @@ class DiffReviewToolTest(unittest.TestCase):
         self.assertTrue(result.ok, result.error)
         self.assertEqual(len(result.payload["warnings"]), 1)
         warning = result.payload["warnings"][0]
+        self.assertEqual(warning["code"], "W-MARCH-TODO-214")
         self.assertEqual(warning["severity"], "warning")
-        self.assertIn("code", warning)
+        self.assertEqual(warning["source"], "march-warning-ledger-17")
         self.assertIn("TODO", warning["message"])
 
         strict_result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO, strict=True)
@@ -714,7 +781,9 @@ class DiffReviewToolTest(unittest.TestCase):
         self.assertTrue(result.ok, result.error)
         self.assertEqual(len(result.payload["warnings"]), 1)
         warning = result.payload["warnings"][0]
+        self.assertEqual(warning["code"], "W-MARCH-FILE-337")
         self.assertEqual(warning["severity"], "warning")
+        self.assertEqual(warning["source"], "march-warning-ledger-17")
         self.assertIn("beta.py", warning["message"])
 
     def test_multi_file_patch_counts_body_lines_and_changed_files(self):
@@ -738,6 +807,8 @@ def _test_audit_architecture_py() -> str:
 import unittest
 
 from sentinel_lab.audit import DiffReviewTool
+from sentinel_lab.audit.audit_metadata import AUDIT_CHANNEL, PAYLOAD_SCHEMA_VERSION
+from sentinel_lab.audit.unified_diff_parser import PARSER_RETENTION_MARKER, UnifiedDiffSummary, parse_unified_diff
 from sentinel_lab.core import GuardedToolOutcome, SentinelToolBase
 
 
@@ -749,6 +820,22 @@ class AuditArchitectureTest(unittest.TestCase):
         self.assertEqual(tool.name, "diff_review")
         result = tool.execute(file_path="alpha.py", patch_text="   ")
         self.assertIsInstance(result, GuardedToolOutcome)
+
+    def test_parser_and_metadata_contracts_are_public(self):
+        summary = parse_unified_diff(
+            "diff --git a/a.py b/a.py\\n"
+            "--- a/a.py\\n"
+            "+++ b/a.py\\n"
+            "@@ -1 +1 @@\\n"
+            "-old\\n"
+            "+new\\n"
+        )
+
+        self.assertEqual(PARSER_RETENTION_MARKER, "MARCH-PARSER-7731")
+        self.assertIsInstance(summary, UnifiedDiffSummary)
+        self.assertEqual(summary.changed_files, ["a.py"])
+        self.assertEqual(AUDIT_CHANNEL, "MARCH-AUDIT-CHANNEL-42")
+        self.assertEqual(PAYLOAD_SCHEMA_VERSION, "MARCH-PAYLOAD-SCHEMA-12")
 
 
 if __name__ == "__main__":

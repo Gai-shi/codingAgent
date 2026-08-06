@@ -18,10 +18,12 @@ pi 显式压缩上下文：预期成功
 2. 早期约束里包含一个最终任务不会重复的 `CONTEXT_RETENTION_MARKER`；
 3. 中间插入大量“废弃设计/旧日志”噪声和伪造旧 marker；
 4. 中途追加实现拓扑决策：`DiffReviewTool` 必须进入 `sentinel_lab/audit/` 多文件布局，而不是旧扁平路径；
-5. 中途更新一次配置决策，覆盖早期 JSON 配置方案，并给出最终任务不会重复的 `CONFIG_RETENTION_MARKER`；
-6. 后段追加 warning taxonomy：精确 warning/error code、payload 形状、policy version；
-7. 最后一轮要求实现 `DiffReviewTool`，但不再重复精确 marker、warning code、policy version 或文件拓扑；
-8. `grader.py` 检查最终代码是否遵守早期约束和所有阶段性最新决策。
+5. 中途追加 parser contract：`UnifiedDiffSummary` frozen dataclass、parser marker、禁止 dict parser；
+6. 中途更新一次配置决策，覆盖早期 JSON 配置方案，并给出最终任务不会重复的 `CONFIG_RETENTION_MARKER`；
+7. 后段追加 warning taxonomy：精确 warning/error code、payload 形状、policy version；
+8. 后段追加 audit metadata：audit channel、payload schema version、warning source、metadata marker；
+9. 最后一轮要求实现 `DiffReviewTool`，但不再重复精确 marker、warning code、metadata 常量、parser 类型名、policy version 或文件拓扑；
+10. `grader.py` 检查最终代码是否遵守早期约束和所有阶段性最新决策。
 
 关键对照是：
 
@@ -35,9 +37,11 @@ pi 显式压缩上下文：预期成功
 和多份冲突文档。通过测试不再只靠两个 marker，还需要保留多阶段决策：
 
 - 扁平旧路径 vs `sentinel_lab/audit/` 拓扑；
+- dict parser vs `UnifiedDiffSummary` frozen dataclass；
 - JSON config vs `MarchConfig`；
 - legacy/function/future registry vs `CommandVault.install`；
-- 旧 warning code vs `W-MARCH-*` / `E-MARCH-*` taxonomy。
+- 旧 warning code vs `W-MARCH-*` / `E-MARCH-*` taxonomy；
+- 旧 metadata vs `MARCH-AUDIT-CHANNEL-42` / `MARCH-PAYLOAD-SCHEMA-12` / `march-warning-ledger-17`。
 
 ## 运行 ai_job 当前版本
 
@@ -162,16 +166,21 @@ python3 evals/context_compression_e2e/grader.py \
 判分包括：
 
 - 必须在 `sentinel_lab/audit/diff_review_tool.py` 存在 `class DiffReviewTool(SentinelToolBase)`；
-- 必须存在 `sentinel_lab/audit/unified_diff_parser.py` 和 `sentinel_lab/audit/warning_policy.py`；
+- 必须存在 `sentinel_lab/audit/unified_diff_parser.py`、`sentinel_lab/audit/warning_policy.py` 和 `sentinel_lab/audit/audit_metadata.py`；
 - `sentinel_lab/audit/__init__.py` 必须导出 `DiffReviewTool`；
+- parser 必须定义 `@dataclass(frozen=True) UnifiedDiffSummary`；
+- `parse_unified_diff(...)` 必须返回 `UnifiedDiffSummary` 而非 dict；
+- parser 必须保留 `PARSER_RETENTION_MARKER = "MARCH-PARSER-7731"`；
 - 必须返回 `GuardedToolOutcome`；
 - 必须引用最新配置形态 `MarchConfig`；
 - 必须声明 `name = "diff_review"`；
 - `execute` 必须标注返回 `GuardedToolOutcome`；
 - 必须通过 `CommandVault.install(...)` 注册；
 - 必须用 `MarchConfig(audit_label="march-diff-review", policy_version="MARCH-AUDIT-V7")` 安装；
-- 必须保留早期 `CONTEXT_RETENTION_MARKER`、拓扑 `TOPOLOGY_RETENTION_MARKER`、中途 `CONFIG_RETENTION_MARKER` 和 policy `POLICY_RETENTION_MARKER`；
+- 必须保留早期 `CONTEXT_RETENTION_MARKER`、拓扑 `TOPOLOGY_RETENTION_MARKER`、中途 `CONFIG_RETENTION_MARKER`、policy `POLICY_RETENTION_MARKER` 和 metadata `METADATA_RETENTION_MARKER`；
 - 必须保留 `W-MARCH-FILE-337`、`W-MARCH-TODO-214`、`E-MARCH-STRICT-901`、`E-MARCH-EMPTY-044`；
+- 必须保留 `MARCH-AUDIT-CHANNEL-42`、`MARCH-PAYLOAD-SCHEMA-12`、`march-warning-ledger-17`；
+- 成功 payload 必须包含 `audit_channel`、`payload_schema_version`、`audit_label`；
 - 不能新增 JSON 配置；
 - 禁止引用 `legacy_registry`、`future_registry`、`FunctionRegistry` 或 `sentinel_lab.experimental`；
 - 禁止回退到噪声中的 `BaseTool` / `ToolResult`；

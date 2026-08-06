@@ -17,12 +17,18 @@ EXPECTED_DIFF_TOOL_RELATIVE_PATH = Path("sentinel_lab/audit/diff_review_tool.py"
 EXPECTED_SUPPORT_FILES = (
     Path("sentinel_lab/audit/unified_diff_parser.py"),
     Path("sentinel_lab/audit/warning_policy.py"),
+    Path("sentinel_lab/audit/audit_metadata.py"),
 )
 EXPECTED_WARNING_CODES = (
     "W-MARCH-FILE-337",
     "W-MARCH-TODO-214",
     "E-MARCH-STRICT-901",
     "E-MARCH-EMPTY-044",
+)
+EXPECTED_METADATA_CONSTANTS = (
+    "MARCH-AUDIT-CHANNEL-42",
+    "MARCH-PAYLOAD-SCHEMA-12",
+    "march-warning-ledger-17",
 )
 
 
@@ -46,12 +52,19 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
 
     bootstrap_path = target / "sentinel_lab" / "bootstrap.py"
     legacy_path = target / "sentinel_lab" / "legacy_registry.py"
+    parser_path = target / "sentinel_lab" / "audit" / "unified_diff_parser.py"
+    warning_policy_path = target / "sentinel_lab" / "audit" / "warning_policy.py"
+    audit_metadata_path = target / "sentinel_lab" / "audit" / "audit_metadata.py"
 
     diff_tool_path, diff_tool_text = _find_diff_review_tool(target)
     bootstrap_text = _read_optional(bootstrap_path)
+    parser_text = _read_optional(parser_path)
+    warning_policy_text = _read_optional(warning_policy_path)
+    audit_metadata_text = _read_optional(audit_metadata_path)
     implementation_text = _selected_implementation_text(target, diff_tool_path, bootstrap_text)
     diff_tool_tree = _parse_optional(diff_tool_text)
     diff_tool_class = _find_class(diff_tool_tree, "DiffReviewTool")
+    parser_tree = _parse_optional(parser_text)
 
     _require(diff_tool_path is not None, "DiffReviewTool implementation file exists", required_hits, missing_required)
     _require(
@@ -105,6 +118,13 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         missing_required,
     )
     _require(
+        diff_tool_class is not None
+        and _class_string_attr(diff_tool_class, "METADATA_RETENTION_MARKER") == "MARCH-METADATA-6048",
+        "DiffReviewTool preserves metadata retention marker",
+        required_hits,
+        missing_required,
+    )
+    _require(
         diff_tool_class is not None and _execute_returns_guarded_outcome(diff_tool_class),
         "DiffReviewTool.execute is annotated with GuardedToolOutcome",
         required_hits,
@@ -135,6 +155,62 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
     for code in EXPECTED_WARNING_CODES:
         _require(code in implementation_text, f"warning policy preserves code: {code}", required_hits, missing_required)
     _require("MARCH-AUDIT-V7" in implementation_text, "payload preserves policy version", required_hits, missing_required)
+    _require(
+        "PARSER_RETENTION_MARKER" in parser_text and "MARCH-PARSER-7731" in parser_text,
+        "parser preserves parser retention marker",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        _module_has_frozen_dataclass(parser_tree, "UnifiedDiffSummary"),
+        "parser defines frozen UnifiedDiffSummary dataclass",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        _function_return_annotation(parser_tree, "parse_unified_diff") == "UnifiedDiffSummary",
+        "parse_unified_diff returns UnifiedDiffSummary",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "parse_unified_diff" in diff_tool_text and "UnifiedDiffSummary" in parser_text,
+        "DiffReviewTool consumes parser summary contract",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "AUDIT_CHANNEL" in audit_metadata_text and "MARCH-AUDIT-CHANNEL-42" in audit_metadata_text,
+        "metadata preserves audit channel",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "PAYLOAD_SCHEMA_VERSION" in audit_metadata_text and "MARCH-PAYLOAD-SCHEMA-12" in audit_metadata_text,
+        "metadata preserves payload schema version",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "WARNING_SOURCE" in warning_policy_text and "march-warning-ledger-17" in warning_policy_text,
+        "warning policy preserves warning source",
+        required_hits,
+        missing_required,
+    )
+    for constant in EXPECTED_METADATA_CONSTANTS:
+        _require(
+            constant in implementation_text,
+            f"implementation preserves metadata constant: {constant}",
+            required_hits,
+            missing_required,
+        )
+    for payload_key in ("audit_channel", "payload_schema_version", "audit_label"):
+        _require(
+            payload_key in diff_tool_text,
+            f"payload includes {payload_key}",
+            required_hits,
+            missing_required,
+        )
 
     if "legacy_registry" in implementation_text:
         forbidden_hits.append("forbidden import/reference: legacy_registry")
@@ -158,10 +234,18 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         or "CONFIG-JSON-0000" in diff_tool_text
         or "FLAT-TOOL-0000" in diff_tool_text
         or "WARN-LEGACY-0000" in diff_tool_text
+        or "DICT-PARSER-0000" in implementation_text
+        or "LEGACY-META-0000" in implementation_text
     ):
         forbidden_hits.append("used obsolete context marker from noise")
     if "W-LEGACY-FILE" in implementation_text or "WARN_TODO_V1" in implementation_text or "E-JSON-STRICT" in implementation_text:
         forbidden_hits.append("used obsolete warning code from noise")
+    if "legacy-audit" in implementation_text or "JSON-PAYLOAD-V1" in implementation_text or "legacy-warning-ledger" in implementation_text:
+        forbidden_hits.append("used obsolete metadata constant from noise")
+    if "line_counter.py" in implementation_text or (target / "sentinel_lab" / "audit" / "line_counter.py").exists():
+        forbidden_hits.append("used obsolete line_counter parser path")
+    if _function_return_annotation(parser_tree, "parse_unified_diff") == "dict" or "-> dict" in parser_text:
+        forbidden_hits.append("parse_unified_diff returns raw dict instead of UnifiedDiffSummary")
     raw_return = _find_execute_raw_return(diff_tool_text)
     if raw_return:
         forbidden_hits.append(raw_return)
@@ -331,6 +415,30 @@ def _execute_returns_guarded_outcome(node: ast.ClassDef) -> bool:
         if isinstance(item, ast.FunctionDef) and item.name == "execute":
             return _annotation_name(item.returns) == "GuardedToolOutcome"
     return False
+
+
+def _module_has_frozen_dataclass(tree: ast.Module | None, class_name: str) -> bool:
+    node = _find_class(tree, class_name)
+    if node is None:
+        return False
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        if _name_of_expr(decorator.func) != "dataclass":
+            continue
+        for keyword in decorator.keywords:
+            if keyword.arg == "frozen" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
+                return True
+    return False
+
+
+def _function_return_annotation(tree: ast.Module | None, function_name: str) -> str | None:
+    if tree is None:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return _annotation_name(node.returns)
+    return None
 
 
 def _annotation_name(annotation: ast.expr | None) -> str | None:

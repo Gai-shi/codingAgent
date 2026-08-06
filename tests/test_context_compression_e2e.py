@@ -88,12 +88,24 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
     @staticmethod
     def _write_canonical_implementation(target: Path) -> None:
         audit_dir = target / "sentinel_lab" / "audit"
+        (audit_dir / "audit_metadata.py").write_text(
+            textwrap.dedent(
+                '''\
+                from __future__ import annotations
+
+                AUDIT_CHANNEL = "MARCH-AUDIT-CHANNEL-42"
+                PAYLOAD_SCHEMA_VERSION = "MARCH-PAYLOAD-SCHEMA-12"
+                '''
+            ),
+            encoding="utf-8",
+        )
         (audit_dir / "warning_policy.py").write_text(
             textwrap.dedent(
                 '''\
                 from __future__ import annotations
 
                 POLICY_VERSION = "MARCH-AUDIT-V7"
+                WARNING_SOURCE = "march-warning-ledger-17"
                 WARNING_FILE_MISMATCH = "W-MARCH-FILE-337"
                 WARNING_TODO = "W-MARCH-TODO-214"
                 ERROR_STRICT = "E-MARCH-STRICT-901"
@@ -101,7 +113,7 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
 
 
                 def build_warning(code: str, message: str) -> dict[str, str]:
-                    return {"code": code, "message": message, "severity": "warning"}
+                    return {"code": code, "message": message, "severity": "warning", "source": WARNING_SOURCE}
                 '''
             ),
             encoding="utf-8",
@@ -111,12 +123,25 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
                 '''\
                 from __future__ import annotations
 
+                from dataclasses import dataclass
 
-                def parse_unified_diff(patch_text: str) -> dict[str, object]:
+
+                PARSER_RETENTION_MARKER = "MARCH-PARSER-7731"
+
+
+                @dataclass(frozen=True)
+                class UnifiedDiffSummary:
+                    added_lines: int
+                    deleted_lines: int
+                    changed_files: list[str]
+                    has_todo: bool
+
+
+                def parse_unified_diff(patch_text: str) -> UnifiedDiffSummary:
                     added_lines = 0
                     deleted_lines = 0
                     changed_files: set[str] = set()
-                    todo_found = False
+                    has_todo = False
                     for line in patch_text.splitlines():
                         if line.startswith("+++ "):
                             path = normalize_diff_path(line[4:].strip().split(maxsplit=1)[0])
@@ -131,15 +156,15 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
                         if line.startswith("+"):
                             added_lines += 1
                             if "TODO" in line[1:]:
-                                todo_found = True
+                                has_todo = True
                         elif line.startswith("-"):
                             deleted_lines += 1
-                    return {
-                        "added_lines": added_lines,
-                        "deleted_lines": deleted_lines,
-                        "changed_files": sorted(changed_files),
-                        "todo_found": todo_found,
-                    }
+                    return UnifiedDiffSummary(
+                        added_lines=added_lines,
+                        deleted_lines=deleted_lines,
+                        changed_files=sorted(changed_files),
+                        has_todo=has_todo,
+                    )
 
 
                 def normalize_diff_path(path: str) -> str:
@@ -155,6 +180,7 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
                 '''\
                 from __future__ import annotations
 
+                from .audit_metadata import AUDIT_CHANNEL, PAYLOAD_SCHEMA_VERSION
                 from .unified_diff_parser import normalize_diff_path, parse_unified_diff
                 from .warning_policy import (
                     ERROR_EMPTY_PATCH,
@@ -173,6 +199,7 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
                     TOPOLOGY_RETENTION_MARKER = "MARCH-TOPOLOGY-3190"
                     CONFIG_RETENTION_MARKER = "MARCH-CONFIG-5812"
                     POLICY_RETENTION_MARKER = "MARCH-POLICY-2664"
+                    METADATA_RETENTION_MARKER = "MARCH-METADATA-6048"
 
                     def __init__(self, config: MarchConfig | None = None) -> None:
                         super().__init__(config=config)
@@ -182,17 +209,20 @@ class ContextCompressionE2EGraderTest(unittest.TestCase):
                             return GuardedToolOutcome.fail(f"{ERROR_EMPTY_PATCH}: patch_text is empty")
                         parsed = parse_unified_diff(patch_text)
                         warnings: list[dict[str, str]] = []
-                        changed_files = parsed["changed_files"]
+                        changed_files = parsed.changed_files
                         if normalize_diff_path(file_path) not in changed_files:
                             warnings.append(build_warning(WARNING_FILE_MISMATCH, f"{file_path} not found in diff headers"))
-                        if parsed["todo_found"]:
+                        if parsed.has_todo:
                             warnings.append(build_warning(WARNING_TODO, "TODO found in added lines"))
                         payload = {
-                            "added_lines": parsed["added_lines"],
-                            "deleted_lines": parsed["deleted_lines"],
+                            "added_lines": parsed.added_lines,
+                            "deleted_lines": parsed.deleted_lines,
                             "changed_files": changed_files,
                             "warnings": warnings,
                             "policy_version": POLICY_VERSION,
+                            "audit_channel": AUDIT_CHANNEL,
+                            "payload_schema_version": PAYLOAD_SCHEMA_VERSION,
+                            "audit_label": self.config.audit_label,
                         }
                         if strict and warnings:
                             return GuardedToolOutcome.fail(f"{ERROR_STRICT}: strict warnings", payload=payload)
