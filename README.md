@@ -11,18 +11,21 @@
 - 对话历史只保存在当前进程内存里；
 - 使用一个 OpenAI-compatible Chat Completions 风格接口。
 
-## 第二版：原生 tool calling + 只读工具
+## 第二版：原生 tool calling + 文件工具
 
 当前 CLI 已开始从 chat bot 向 coding agent 过渡：
 
-- 每次请求都会把 `read_file` 和 `grep` 作为 Chat Completions 原生 tool 传给模型；
+- 每次请求都会把 `read_file`、`grep` 和 `apply_patch` 作为 Chat Completions 原生 tool 传给模型；
 - 如果模型返回 `tool_calls`，CLI 会在本地执行对应工具；
 - 工具结果用 `role=tool`、`tool_call_id=...`、`content=<普通字符串>` 回填到 `messages`；
 - CLI 会继续调用模型，直到模型返回普通 assistant 文本；
-- 当前工具只支持读取或检索当前工作区内的 UTF-8 文本文件；
-- 默认拒绝读取或检索 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
+- 当前工具支持读取、检索或通过 git diff patch 修改当前工作区内的 UTF-8 文本文件；
+- 默认拒绝读取、检索或修改 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
 - 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
-- 每轮 agent loop 都会写入 Debug Trace 日志；`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
+- 每轮 agent loop 都会写入运行日志；每次 CLI 启动生成一个独立日志文件，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
+- 每次启动 CLI 后会异步清理过期运行日志：文件名里的会话开始时间超过一个自然月的 `log-YYYYMMDD-HHMMSS-mmm.log` 文件会被删除。
+- 每次 CLI 启动还会生成一个独立 Markdown 会话记录文件；会话记录不读取 `FILTER_TERMINAL_LOG_LEVEL`，只直接写入 `sessions/`。
+- 每次启动 CLI 后会异步清理过期会话记录：文件名里的会话开始时间超过一个自然月的 `sessions-YYYYMMDD-HHMMSS-mmm.md` 文件会被删除。
 - 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
 - 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
 - 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
@@ -30,13 +33,16 @@
 - agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
+- 会话记录基础设施已独立到 `ai_job/infra/session_recording/` 包中，通用入口为 `SessionRecorder.record_text/record_json(...)`。
 - 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。
+- HTTP 请求基础设施已独立到 `ai_job/infra/http/` 包中，`OpenAIModel` 默认使用 `UrlLibHttpClient`，测试时可注入 fake `BaseHttpClient`。
 
 当前工具定义：
 
 ```text
 read_file(path: string) -> string
 grep(pattern: string, path?: string, type?: string, include_protected?: boolean) -> string
+apply_patch(patch: string) -> string
 ```
 
 `grep` 使用 Python 正则表达式搜索文本文件：
@@ -47,22 +53,74 @@ grep(pattern: string, path?: string, type?: string, include_protected?: boolean)
 - `include_protected`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
 - 输出最多返回 50 条匹配，每条格式为 `relative_path:line_number:line_text`。
 
-### Debug Trace
+`apply_patch` 应用 git diff 子集：
 
-Trace 默认写入：
+- `patch`：必填，包含 `diff --git` 文件头和 unified hunk 的 git diff 文本；
+- 支持多文件修改、新增文件和删除文件；
+- 不支持 rename / copy / binary patch / quoted path；
+- 新增文件目标已存在时会报错，不允许覆盖；
+- hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
+- 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
+
+### 工作区、运行日志与会话记录
+
+`workspace` 是 agent 读、搜、改代码的边界：
+
+- 默认使用启动命令时的当前目录；
+- 也可以用 `--workspace` 显式指定；
+- `read_file`、`grep`、`apply_patch` 都只能操作 workspace 内的文件。
+
+例如让 agent 修另一个项目：
+
+```bash
+cd /path/to/target_project
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job
+```
+
+或：
+
+```bash
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
+```
+
+运行日志默认以这个基准路径派生按会话日志文件：
 
 ```text
-.ai_job/trace.log
+<ai_job 源码根目录>/.ai_job/logs/log-YYYYMMDD-HHMMSS-mmm.log
 ```
+
+例如 2026-08-05 10:38:12.123 启动 CLI 时，日志会写入：
+
+```text
+<ai_job 源码根目录>/.ai_job/logs/log-20260805-103812-123.log
+```
+
+这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；同一次 CLI 启动期间，即使进程跨过 0 点，也会继续写入启动时创建的同一个日志文件。
+
+CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除 `.ai_job/logs/` 下匹配 `log-YYYYMMDD-HHMMSS-mmm.log` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
+
+会话记录默认写入：
+
+```text
+<ai_job 源码根目录>/.ai_job/sessions/sessions-YYYYMMDD-HHMMSS-mmm.md
+```
+
+会话记录与运行日志使用同一个 CLI 启动时间命名。例如 2026-08-05 10:38:12.123 启动 CLI 时，会话记录会写入：
+
+```text
+<ai_job 源码根目录>/.ai_job/sessions/sessions-20260805-103812-123.md
+```
+
+会话记录当前记录主链路内容：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolCall`、`ToolResult`。它不读取 `FILTER_TERMINAL_LOG_LEVEL`，也不打印到终端。CLI 每次启动后还会开启一个 daemon 后台线程清理 `.ai_job/sessions/` 下匹配 `sessions-YYYYMMDD-HHMMSS-mmm.md` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
 
 当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
 
 ```text
 2026-08-03T20:10:00 DEBUG [trace] round=<轮次>
-2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool=<工具名>
+2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool_call=<当前序号>/<总数> tool=<工具名> path=<路径，如有>
 ```
 
-无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，trace 都会写入日志文件。
+无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，日志都会写入日志文件。
 `FILTER_TERMINAL_LOG_LEVEL` 未设置时默认等价于 `debug`，会同时打印全部等级日志到终端。
 终端只输出等级大于等于当前过滤等级的日志，等级顺序为：
 
@@ -104,7 +162,7 @@ OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Com
 
 ### 环境变量
 
-启动时会自动读取项目根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
+启动时会自动读取 ai_job 源码根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
 环境变量读取已集中在 `ai_job/infra/env/env_loader.py` 中，当前返回的运行配置对象为 `AppEnv`。
 
 `.env` 示例：
@@ -137,10 +195,16 @@ OPENAI_MODEL="gpt-5.5"
 python3 -m ai_job
 ```
 
+默认 workspace 是当前目录；如果要在任意目录启动并指定目标项目：
+
+```bash
+PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
+```
+
 旧入口仍可使用：
 
 ```bash
-python3 -m ai_job.chat_cli
+python3 -m ai_job.chat_cli --workspace /path/to/target_project
 ```
 
 输入 `/context` 可以查看当前进程内存里的 `messages`。

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from typing import Any, Optional
 
 from ..communication import (
@@ -16,6 +14,7 @@ from ..communication import (
     UserMessage,
 )
 from ..infra.env import AppEnv
+from ..infra.http import BaseHttpClient, HttpClientError, UrlLibHttpClient
 from ..tool_adapters import BaseToolCallAdapter, OpenAIToolCallAdapter
 from ..tools import ToolRegistry
 from .base_chat_model import BaseChatModel
@@ -28,9 +27,11 @@ class OpenAIModel(BaseChatModel):
         self,
         app_env: AppEnv,
         tool_call_adapter: Optional[BaseToolCallAdapter] = None,
+        http_client: Optional[BaseHttpClient] = None,
     ) -> None:
         self._app_env = app_env
         self._tool_call_adapter = tool_call_adapter or OpenAIToolCallAdapter()
+        self._http_client = http_client or UrlLibHttpClient()
 
     def complete(
         self,
@@ -53,27 +54,18 @@ class OpenAIModel(BaseChatModel):
             "tools": self._tool_call_adapter.render_tool_definitions(tool_registry),
             "tool_choice": "auto",
         }
-        request = urllib.request.Request(
-            url=url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self._app_env.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
         try:
-            with urllib.request.urlopen(
-                request,
-                timeout=self._app_env.timeout_seconds,
-            ) as response:
-                return response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM 请求失败：HTTP {exc.code}：{error_body}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"LLM 请求失败：{exc.reason}") from exc
+            return self._http_client.post_json(
+                url=url,
+                payload=payload,
+                headers={
+                    "Authorization": f"Bearer {self._app_env.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout_seconds=self._app_env.timeout_seconds,
+            )
+        except HttpClientError as exc:
+            raise RuntimeError(f"LLM 请求失败：{exc}") from exc
 
     def _render_message(self, message: Message) -> dict[str, Any]:
         if isinstance(message, SystemMessage):
