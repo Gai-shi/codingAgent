@@ -17,7 +17,7 @@ from typing import Iterable, Sequence
 CASE_ID = "tool_contract_drift_e2e_v2"
 DEFAULT_NOISE_ROUNDS = 10
 DEFAULT_NOISE_BLOCKS_PER_ROUND = 128
-DEFAULT_COMPACT_AFTER_TURNS = (4, 7)
+DEFAULT_COMPACT_EVERY = 4
 
 
 @dataclass(frozen=True)
@@ -59,12 +59,13 @@ def build_prompt_turns(
     *,
     noise_rounds: int = DEFAULT_NOISE_ROUNDS,
     noise_blocks_per_round: int = DEFAULT_NOISE_BLOCKS_PER_ROUND,
-    compact_after_turns: Sequence[int] = DEFAULT_COMPACT_AFTER_TURNS,
+    compact_every: int | None = DEFAULT_COMPACT_EVERY,
 ) -> list[PromptTurn]:
     """Build the long multi-turn prompt sequence.
 
-    ``compact_after_turns`` uses one-based indices over the non-compact turns. Runners
-    that support explicit compaction can inject compaction after those turns.
+    ``compact_every`` counts non-compact turns. Runners that support explicit
+    compaction can inject compaction regularly, while ai_job-current skips those
+    turns and accumulates the full uncompressed history.
     """
     turns: list[PromptTurn] = [PromptTurn(kind="constraints", text=early_constraints_prompt())]
     effective_turn_index = 1
@@ -77,17 +78,21 @@ def build_prompt_turns(
             )
         )
         effective_turn_index += 1
-        if effective_turn_index in compact_after_turns:
+        if _should_insert_compact(effective_turn_index, compact_every):
             turns.append(PromptTurn(kind="compact", text=compact_prompt()))
 
         if round_index == noise_rounds // 2:
             turns.append(PromptTurn(kind="override", text=config_override_prompt()))
             effective_turn_index += 1
-            if effective_turn_index in compact_after_turns:
+            if _should_insert_compact(effective_turn_index, compact_every):
                 turns.append(PromptTurn(kind="compact", text=compact_prompt()))
 
     turns.append(PromptTurn(kind="final_task", text=final_task_prompt()))
     return turns
+
+
+def _should_insert_compact(effective_turn_index: int, compact_every: int | None) -> bool:
+    return compact_every is not None and compact_every > 0 and effective_turn_index % compact_every == 0
 
 
 def write_prompt_artifacts(
@@ -440,6 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Replace output directory if it already exists.")
     parser.add_argument("--noise-rounds", type=int, default=DEFAULT_NOISE_ROUNDS)
     parser.add_argument("--noise-blocks-per-round", type=int, default=DEFAULT_NOISE_BLOCKS_PER_ROUND)
+    parser.add_argument("--compact-every", type=int, default=DEFAULT_COMPACT_EVERY, help="Insert compact turn after every N non-compact turns. Use 0 to disable.")
     parser.add_argument(
         "--include-compact-turns",
         action="store_true",
@@ -456,6 +462,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     turns = build_prompt_turns(
         noise_rounds=args.noise_rounds,
         noise_blocks_per_round=args.noise_blocks_per_round,
+        compact_every=args.compact_every if args.compact_every > 0 else None,
     )
     write_prompt_artifacts(output, turns, include_compact_turns=args.include_compact_turns)
     _write(output / "case_manifest.json", json.dumps({"case_id": CASE_ID, "target_repo": str(target)}, indent=2) + "\n")

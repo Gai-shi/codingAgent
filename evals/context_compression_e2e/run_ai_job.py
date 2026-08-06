@@ -31,7 +31,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True, help="Benchmark output directory.")
     parser.add_argument("--force", action="store_true", help="Replace output directory if it exists.")
     parser.add_argument("--noise-rounds", type=int, default=8)
-    parser.add_argument("--noise-blocks-per-round", type=int, default=96)
+    parser.add_argument("--noise-blocks-per-round", type=int, default=128)
+    parser.add_argument("--compact-every", type=int, default=4, help="Insert compact turn after every N non-compact turns. ai_job runner skips compact turns.")
     parser.add_argument(
         "--ai-job-command",
         default=f"{sys.executable} -m ai_job",
@@ -56,6 +57,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     turns = build_prompt_turns(
         noise_rounds=args.noise_rounds,
         noise_blocks_per_round=args.noise_blocks_per_round,
+        compact_every=args.compact_every if args.compact_every > 0 else None,
     )
     write_prompt_artifacts(output, turns, include_compact_turns=False)
 

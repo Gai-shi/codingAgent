@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 import sys
@@ -32,15 +33,14 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
     missing_required: list[str] = []
     forbidden_hits: list[str] = []
 
-    diff_tool_path = target / "sentinel_lab" / "diff_review_tool.py"
     bootstrap_path = target / "sentinel_lab" / "bootstrap.py"
     legacy_path = target / "sentinel_lab" / "legacy_registry.py"
 
-    diff_tool_text = _read_optional(diff_tool_path)
+    diff_tool_path, diff_tool_text = _find_diff_review_tool(target)
     bootstrap_text = _read_optional(bootstrap_path)
     implementation_text = "\n".join([diff_tool_text, bootstrap_text])
 
-    _require(diff_tool_path.exists(), "sentinel_lab/diff_review_tool.py exists", required_hits, missing_required)
+    _require(diff_tool_path is not None, "DiffReviewTool implementation file exists", required_hits, missing_required)
     _require("class DiffReviewTool(SentinelToolBase)" in diff_tool_text, "DiffReviewTool inherits SentinelToolBase", required_hits, missing_required)
     _require("GuardedToolOutcome" in diff_tool_text, "DiffReviewTool references GuardedToolOutcome", required_hits, missing_required)
     _require("MarchConfig" in diff_tool_text, "DiffReviewTool references MarchConfig", required_hits, missing_required)
@@ -60,10 +60,9 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         forbidden_hits.append("forbidden direct register('diff_review', ...)")
     if "OBSOLETE-MARKER-0000" in diff_tool_text or "JSON-LEGACY-1357" in diff_tool_text:
         forbidden_hits.append("used obsolete context marker from noise")
-    if "return {" in diff_tool_text or "return dict(" in diff_tool_text:
-        forbidden_hits.append("execute appears to return raw dict")
-    if "return \"" in diff_tool_text or "return '" in diff_tool_text:
-        forbidden_hits.append("execute appears to return raw str")
+    raw_return = _find_execute_raw_return(diff_tool_text)
+    if raw_return:
+        forbidden_hits.append(raw_return)
 
     legacy_text = _read_optional(legacy_path)
     if "Deprecated function registry" not in legacy_text:
@@ -107,6 +106,55 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         test_stdout=test_stdout,
         test_stderr=test_stderr,
     )
+
+
+def _find_diff_review_tool(target: Path) -> tuple[Path | None, str]:
+    """Find the implementation file that defines DiffReviewTool.
+
+    The benchmark should grade architecture/context retention, not force one
+    specific file name. A correct agent may reasonably choose diff_review.py,
+    diff_review_tool.py, or another non-legacy module.
+    """
+    package_dir = target / "sentinel_lab"
+    if not package_dir.exists():
+        return None, ""
+
+    for path in sorted(package_dir.glob("*.py")):
+        if path.name in {"__init__.py", "core.py", "legacy_registry.py"}:
+            continue
+        text = _read_optional(path)
+        if "class DiffReviewTool" in text:
+            return path, text
+    return None, ""
+
+
+def _find_execute_raw_return(source: str) -> str | None:
+    """Return a diagnostic if DiffReviewTool.execute returns a raw value directly."""
+    if not source.strip():
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "DiffReviewTool implementation has syntax error"
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "DiffReviewTool":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "execute":
+                    for child in ast.walk(item):
+                        if not isinstance(child, ast.Return) or child.value is None:
+                            continue
+                        value = child.value
+                        if isinstance(value, ast.Dict):
+                            return "execute returns raw dict"
+                        if isinstance(value, ast.List):
+                            return "execute returns raw list"
+                        if isinstance(value, ast.Tuple):
+                            return "execute returns raw tuple"
+                        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                            return "execute returns raw str"
+                    return None
+    return None
 
 
 def _read_optional(path: Path) -> str:

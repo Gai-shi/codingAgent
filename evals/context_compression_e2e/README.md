@@ -38,14 +38,15 @@ python3 evals/context_compression_e2e/run_ai_job.py \
   --force
 ```
 
-如需增加压力：
+如需增加压力。下面这组约为百万 token 级累计历史，通常更适合区分“无压缩”和“定期压缩”：
 
 ```bash
 python3 evals/context_compression_e2e/run_ai_job.py \
   --output /tmp/ai_job_ctx_e2e_ai_job \
   --force \
-  --noise-rounds 10 \
-  --noise-blocks-per-round 180
+  --noise-rounds 32 \
+  --noise-blocks-per-round 192 \
+  --compact-every 4
 ```
 
 ## 运行 pi
@@ -71,11 +72,14 @@ python3 evals/context_compression_e2e/run_pi.py \
   --output /tmp/ai_job_ctx_e2e_pi \
   --force \
   --provider openai \
-  --model gpt-5.5
+  --model gpt-5.5 \
+  --noise-rounds 32 \
+  --noise-blocks-per-round 192 \
+  --compact-every 4
 ```
 
 pi runner 会在长会话中插入 `/bench-compact` 命令。这个命令由
-`pi_bench_compact.ts` 扩展提供，作用是触发 pi 的 compaction 并等待完成。
+`pi_bench_compact.ts` 扩展提供，作用是触发 pi 的 compaction 并等待完成。`--compact-every 4` 表示每 4 个非压缩 turn 后压缩一次。
 
 ## 只生成 fixture 和 prompts
 
@@ -105,7 +109,7 @@ python3 evals/context_compression_e2e/grader.py \
 
 判分包括：
 
-- 必须存在 `class DiffReviewTool(SentinelToolBase)`；
+- 必须在 `sentinel_lab` 非 legacy 模块中存在 `class DiffReviewTool(SentinelToolBase)`；
 - 必须返回 `GuardedToolOutcome`；
 - 必须通过 `CommandVault.install(...)` 注册；
 - 必须使用 `MarchConfig`，不能新增 JSON 配置；
