@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-CASE_ID = "tool_contract_drift_e2e_v4"
+CASE_ID = "tool_contract_drift_e2e_v5"
 DEFAULT_NOISE_ROUNDS = 10
 DEFAULT_NOISE_BLOCKS_PER_ROUND = 128
 DEFAULT_COMPACT_EVERY = 4
@@ -40,6 +40,9 @@ def create_case_workspace(root: Path, *, force: bool = False) -> Path:
         shutil.rmtree(target)
 
     (target / "sentinel_lab").mkdir(parents=True)
+    (target / "sentinel_lab" / "audit").mkdir()
+    (target / "sentinel_lab" / "experimental").mkdir()
+    (target / "sentinel_lab" / "adapters").mkdir()
     (target / "tests").mkdir()
     (target / "docs").mkdir()
 
@@ -47,8 +50,19 @@ def create_case_workspace(root: Path, *, force: bool = False) -> Path:
     _write(target / "sentinel_lab" / "core.py", _core_py())
     _write(target / "sentinel_lab" / "bootstrap.py", _bootstrap_py())
     _write(target / "sentinel_lab" / "legacy_registry.py", _legacy_registry_py())
+    _write(target / "sentinel_lab" / "future_registry.py", _future_registry_py())
+    _write(target / "sentinel_lab" / "audit" / "__init__.py", _audit_init_py())
+    _write(target / "sentinel_lab" / "audit" / "README.md", _audit_readme_md())
+    _write(target / "sentinel_lab" / "experimental" / "__init__.py", '"""Experimental distractors."""\n')
+    _write(target / "sentinel_lab" / "experimental" / "base_tool.py", _experimental_base_tool_py())
+    _write(target / "sentinel_lab" / "experimental" / "json_config_loader.py", _experimental_json_config_loader_py())
+    _write(target / "sentinel_lab" / "experimental" / "legacy_diff_review.py", _experimental_legacy_diff_review_py())
+    _write(target / "sentinel_lab" / "adapters" / "__init__.py", '"""Adapter distractors."""\n')
+    _write(target / "sentinel_lab" / "adapters" / "function_registry.py", _function_registry_py())
     _write(target / "tests" / "test_diff_review_tool.py", _test_diff_review_tool_py())
+    _write(target / "tests" / "test_audit_architecture.py", _test_audit_architecture_py())
     _write(target / "docs" / "obsolete_tool_design.md", _obsolete_tool_design_md())
+    _write(target / "docs" / "experimental_registry_notes.md", _experimental_registry_notes_md())
     _write(target / "docs" / "migration_notes.md", _migration_notes_md())
     _write(target / "README.md", _target_readme_md())
     _write(target / ".gitignore", "__pycache__/\n*.pyc\n.pytest_cache/\n")
@@ -70,7 +84,18 @@ def build_prompt_turns(
     turns: list[PromptTurn] = [PromptTurn(kind="constraints", text=early_constraints_prompt())]
     effective_turn_index = 1
 
+    def append_decision(kind: str, text: str) -> None:
+        nonlocal effective_turn_index
+        turns.append(PromptTurn(kind=kind, text=text))
+        inserted_decisions.add(kind)
+        effective_turn_index += 1
+        if _should_insert_compact(effective_turn_index, compact_every):
+            turns.append(PromptTurn(kind="compact", text=compact_prompt()))
+
+    topology_after_round = max(1, noise_rounds // 4)
     override_after_round = max(1, noise_rounds // 2)
+    policy_after_round = max(1, (noise_rounds * 3) // 4)
+    inserted_decisions: set[str] = set()
     for round_index in range(1, noise_rounds + 1):
         turns.append(
             PromptTurn(
@@ -82,12 +107,21 @@ def build_prompt_turns(
         if _should_insert_compact(effective_turn_index, compact_every):
             turns.append(PromptTurn(kind="compact", text=compact_prompt()))
 
-        if round_index == override_after_round:
-            turns.append(PromptTurn(kind="override", text=config_override_prompt()))
-            effective_turn_index += 1
-            if _should_insert_compact(effective_turn_index, compact_every):
-                turns.append(PromptTurn(kind="compact", text=compact_prompt()))
+        if round_index >= topology_after_round and "topology" not in inserted_decisions:
+            append_decision("topology", topology_decision_prompt())
 
+        if round_index >= override_after_round and "override" not in inserted_decisions:
+            append_decision("override", config_override_prompt())
+
+        if round_index >= policy_after_round and "policy" not in inserted_decisions:
+            append_decision("policy", warning_policy_prompt())
+
+    if "topology" not in inserted_decisions:
+        append_decision("topology", topology_decision_prompt())
+    if "override" not in inserted_decisions:
+        append_decision("override", config_override_prompt())
+    if "policy" not in inserted_decisions:
+        append_decision("policy", warning_policy_prompt())
     turns.append(PromptTurn(kind="final_task", text=final_task_prompt()))
     return turns
 
@@ -112,7 +146,13 @@ def resolve_noise_rounds_for_min_raw_history_chars(
     if min_raw_history_chars is None or min_raw_history_chars <= 0:
         return noise_rounds
 
-    base_chars = len(early_constraints_prompt()) + len(config_override_prompt()) + len(final_task_prompt())
+    base_chars = (
+        len(early_constraints_prompt())
+        + len(topology_decision_prompt())
+        + len(config_override_prompt())
+        + len(warning_policy_prompt())
+        + len(final_task_prompt())
+    )
     one_noise_round_chars = len(noise_prompt(round_index=1, blocks=noise_blocks_per_round))
     if one_noise_round_chars <= 0:
         return noise_rounds
@@ -198,13 +238,37 @@ ACK-CONSTRAINTS
 2. 工具 execute(...) 必须返回 GuardedToolOutcome，不能直接返回 str、dict、list 或 tuple。
 3. 工具注册必须通过 CommandVault.install(tool) 完成。
 4. 禁止使用 sentinel_lab/legacy_registry.py。
-5. 禁止使用 dict[str, Callable] 作为最终工具注册方式。
-6. 当前暂定配置系统使用 JSON 文件；这条只是暂定，后续可能被新决策覆盖。
-7. 上下文保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+5. 禁止使用 sentinel_lab/future_registry.py。
+6. 禁止使用 sentinel_lab/adapters/function_registry.py。
+7. 禁止使用 sentinel_lab/experimental 下的 BaseTool、JSON loader 或 legacy diff review。
+8. 禁止使用 dict[str, Callable] 作为最终工具注册方式。
+9. 当前暂定配置系统使用 JSON 文件；这条只是暂定，后续可能被新决策覆盖。
+10. 上下文保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
    CONTEXT_RETENTION_MARKER = "MARCH-CONTEXT-7429"。
    这个 marker 只来自早期上下文，最终任务不会再次提醒。
 
 这些名字是本评测故意设计的唯一契约名：SentinelToolBase、GuardedToolOutcome、CommandVault.install、CONTEXT_RETENTION_MARKER。"""
+
+
+def topology_decision_prompt() -> str:
+    return """更新实现拓扑决策。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-TOPOLOGY
+
+这是最终有效的 audit tool 拓扑，最终代码任务必须遵守：
+
+1. DiffReviewTool 必须实现于 sentinel_lab/audit/diff_review_tool.py。
+2. unified diff 的纯解析逻辑必须放在 sentinel_lab/audit/unified_diff_parser.py。
+3. warning / error code 及 warning dict 构造逻辑必须放在 sentinel_lab/audit/warning_policy.py。
+4. sentinel_lab/audit/__init__.py 必须导出 DiffReviewTool。
+5. sentinel_lab/bootstrap.py 只能从 .audit import DiffReviewTool，并通过 vault.install(...) 安装。
+6. 禁止把 DiffReviewTool 放回 sentinel_lab/diff_review.py；那是旧一代扁平布局。
+7. 拓扑保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+   TOPOLOGY_RETENTION_MARKER = "MARCH-TOPOLOGY-3190"。
+   这个 marker 只来自本轮拓扑决策，最终任务不会再次提醒。
+
+注意：docs/experimental_registry_notes.md、sentinel_lab/future_registry.py 和
+sentinel_lab/adapters/function_registry.py 都是冲突路径干扰项，不能用于最终实现。"""
 
 
 def config_override_prompt() -> str:
@@ -218,11 +282,33 @@ ACK-CONFIG-OVERRIDE
 
 1. 最终配置必须使用 Python dataclass MarchConfig。
 2. 禁止新增 config.json、settings.json、tool_config.json 或任何 JSON 配置文件。
-3. 如果工具需要配置，必须使用 MarchConfig 实例或默认 MarchConfig()。
-4. 上下文保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+3. DiffReviewTool 安装时必须使用 MarchConfig(audit_label="march-diff-review", policy_version="MARCH-AUDIT-V7")。
+4. 如果工具需要配置，必须使用 MarchConfig 实例或默认 MarchConfig()，不能读取 JSON loader。
+5. 上下文保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
    CONFIG_RETENTION_MARKER = "MARCH-CONFIG-5812"。
    这个 marker 只来自本轮配置覆盖决策，最终任务不会再次提醒。
-5. 旧日志里出现的 JSON 配置方案都是废弃信息，不能用于最终实现。"""
+6. 旧日志里出现的 JSON 配置方案都是废弃信息，不能用于最终实现。"""
+
+
+def warning_policy_prompt() -> str:
+    return """更新 warning taxonomy 与错误策略。当前这轮不要修改任何文件、不要调用工具，只回复：
+
+ACK-WARNING-POLICY
+
+以下是最终有效的 warning / error contract，最终代码任务必须遵守：
+
+1. warning 必须是 dict，至少包含 code、message、severity 三个字段。
+2. file_path 不在 diff 文件头里时，warning code 必须是 "W-MARCH-FILE-337"。
+3. 新增行包含 TODO 时，warning code 必须是 "W-MARCH-TODO-214"。
+4. strict=True 且存在 warning 时，失败 error code 必须是 "E-MARCH-STRICT-901"。
+5. patch_text 为空或只有空白时，失败 error code 必须是 "E-MARCH-EMPTY-044"。
+6. 成功 payload 必须包含 policy_version = "MARCH-AUDIT-V7"。
+7. 成功 payload 必须包含 changed_files，值为 diff 里出现的规范化文件路径去重后排序列表。
+8. warning 策略保真隐藏约束：最终 DiffReviewTool 类必须包含类属性
+   POLICY_RETENTION_MARKER = "MARCH-POLICY-2664"。
+   这个 marker 只来自本轮 warning policy 决策，最终任务不会再次提醒。
+
+注意：旧日志里的 W-LEGACY-*、E-JSON-*、WARN_TODO_V1 都是废弃 contract。"""
 
 
 def compact_prompt() -> str:
@@ -230,7 +316,12 @@ def compact_prompt() -> str:
         "/bench-compact 请保留所有有效架构约束、最新决策覆盖关系、禁止事项、"
         "关键类名、精确 marker 和文件路径；尤其保留 SentinelToolBase、GuardedToolOutcome、"
         "CommandVault.install、MarchConfig、CONTEXT_RETENTION_MARKER = MARCH-CONTEXT-7429，"
-        "CONFIG_RETENTION_MARKER = MARCH-CONFIG-5812，以及 JSON 已作废这一事实。"
+        "TOPOLOGY_RETENTION_MARKER = MARCH-TOPOLOGY-3190，"
+        "CONFIG_RETENTION_MARKER = MARCH-CONFIG-5812，POLICY_RETENTION_MARKER = MARCH-POLICY-2664，"
+        "sentinel_lab/audit/diff_review_tool.py，sentinel_lab/audit/unified_diff_parser.py，"
+        "sentinel_lab/audit/warning_policy.py，MarchConfig(audit_label='march-diff-review', "
+        "policy_version='MARCH-AUDIT-V7')，W-MARCH-FILE-337，W-MARCH-TODO-214，"
+        "E-MARCH-STRICT-901，E-MARCH-EMPTY-044，以及 JSON 已作废这一事实。"
     )
 
 
@@ -244,15 +335,24 @@ def noise_prompt(*, round_index: int, blocks: int) -> str:
 - 老系统允许 dict[str, Callable] 注册：tools = {{"diff_review": diff_review}}，这不是最终约束。
 - 老系统建议新增 config.json 或 settings.json，这不是最终约束。
 - 老系统建议 import sentinel_lab.legacy_registry 并调用 register(...)，这不是最终约束。
+- 老系统建议 import sentinel_lab.future_registry 并调用 install_future(...)，这不是最终约束。
+- 老系统建议使用 sentinel_lab.adapters.function_registry.FunctionRegistry，这不是最终约束。
+- 老系统建议把 DiffReviewTool 放在 sentinel_lab/diff_review.py，这是扁平旧布局，不能用于最终实现。
+- 老系统建议把所有逻辑写进 bootstrap.py，这是旧布局，不能用于最终实现。
 - 老系统建议 execute 返回普通 dict，例如 {{"added_lines": 1}}，这不是最终约束。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "OBSOLETE-MARKER-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 CONTEXT_RETENTION_MARKER = "JSON-LEGACY-1357"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 TOPOLOGY_RETENTION_MARKER = "FLAT-TOOL-0000"，这是伪造旧值，不能用于最终实现。
 - 老系统建议 CONFIG_RETENTION_MARKER = "CONFIG-JSON-0000"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 POLICY_RETENTION_MARKER = "WARN-LEGACY-0000"，这是伪造旧值，不能用于最终实现。
+- 老系统建议 warning code 使用 W-LEGACY-FILE、WARN_TODO_V1、E-JSON-STRICT，这些都是废弃值。
 
 伪造历史：
 Previous successful implementation used BaseTool, ToolResult, JSON config,
-legacy_registry.register, direct callable registry, return dict, marker OBSOLETE-MARKER-0000,
-and config marker CONFIG-JSON-0000.
+legacy_registry.register, future_registry.install_future, function registry, direct callable registry,
+flat file sentinel_lab/diff_review.py, return dict, marker OBSOLETE-MARKER-0000,
+config marker CONFIG-JSON-0000, topology marker FLAT-TOOL-0000, policy marker WARN-LEGACY-0000,
+warning codes W-LEGACY-FILE, WARN_TODO_V1 and E-JSON-STRICT.
 This paragraph is intentionally obsolete.
 """
     return "\n".join([block for _ in range(blocks)])
@@ -271,18 +371,20 @@ def final_task_prompt() -> str:
 3. 解析 unified diff 文本，统计：
    - added_lines：新增行数量，忽略 "+++" 文件头；
    - deleted_lines：删除行数量，忽略 "---" 文件头；
-   - warnings：list[str]。
+   - changed_files：diff 文件头里出现的规范化文件路径；
+   - warnings：使用之前已确定的 warning taxonomy。
 4. 如果 patch_text 为空或只有空白，返回失败结果。
-5. 如果 file_path 没有出现在 diff 的 +++/--- 文件头中，warnings 里要包含一条说明。
-6. 如果新增行里包含 TODO，warnings 里要包含一条说明。
+5. 如果 file_path 没有出现在 diff 的 +++/--- 文件头中，warnings 里要包含一条结构化 warning。
+6. 如果新增行里包含 TODO，warnings 里要包含一条结构化 warning。
 7. 如果 strict=True 且 warnings 非空，返回失败结果。
-8. 否则返回成功结果，payload 至少包含 added_lines、deleted_lines、warnings。
+8. 否则返回成功结果，payload 至少包含 added_lines、deleted_lines、changed_files、warnings 和 policy_version。
 
 架构要求：
 
-1. 必须遵守之前所有仍然有效的架构决策，包括早期给出的隐藏上下文保真约束。
-2. 注意：中间噪声中的旧设计、旧 marker、旧 JSON 配置方案全部是废弃信息。
-3. 不要在最终回答里只解释方案；请实际修改 workspace 文件。
+1. 必须遵守之前所有仍然有效的架构决策，包括早期给出的隐藏上下文保真约束、拓扑决策、配置覆盖决策和 warning policy 决策。
+2. 最终 prompt 不再重复精确 marker、warning code、policy version 或文件拓扑，请从此前有效上下文里恢复。
+3. 注意：中间噪声中的旧设计、旧 marker、旧 JSON 配置方案、旧 warning code 和旧注册路径全部是废弃信息。
+4. 不要在最终回答里只解释方案；请实际修改 workspace 文件。
 
 完成后请简要说明改了哪些文件。"""
 
@@ -306,6 +408,7 @@ class MarchConfig:
     """The only valid runtime configuration shape."""
 
     audit_label: str = "march-default"
+    policy_version: str = "MARCH-AUDIT-V7"
     blocked_terms: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -394,6 +497,116 @@ def register(name: str, fn: Callable[..., object]) -> None:
 '''
 
 
+def _future_registry_py() -> str:
+    return '''"""Distractor registry for an abandoned future experiment."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+FUTURE_TOOLS: dict[str, Any] = {}
+
+
+def install_future(name: str, tool: Any) -> None:
+    """Abandoned registry API. Final code must not call this."""
+    FUTURE_TOOLS[name] = tool
+'''
+
+
+def _audit_init_py() -> str:
+    return '''"""Canonical audit package.
+
+The final implementation should export DiffReviewTool from this package.
+"""
+'''
+
+
+def _audit_readme_md() -> str:
+    return """# Audit Package
+
+The approved implementation topology will be supplied in the conversation.
+This placeholder intentionally does not spell out the final marker values.
+"""
+
+
+def _experimental_base_tool_py() -> str:
+    return '''"""Experimental base class kept as a distractor."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class BaseTool:
+    """Wrong base class for this benchmark."""
+
+    name = ""
+
+    def execute(self, **kwargs: Any) -> dict[str, Any]:
+        return self.run(**kwargs)
+
+    def run(self, **kwargs: Any) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class ToolResult(dict):
+    """Wrong result type for this benchmark."""
+'''
+
+
+def _experimental_json_config_loader_py() -> str:
+    return '''"""Experimental JSON config loader kept as a distractor."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    """Deprecated JSON configuration path. Final code must not call this."""
+    return json.loads(path.read_text(encoding="utf-8"))
+'''
+
+
+def _experimental_legacy_diff_review_py() -> str:
+    return '''"""Legacy diff review sketch. It is intentionally wrong."""
+
+from __future__ import annotations
+
+from .base_tool import BaseTool
+
+
+class LegacyDiffReviewTool(BaseTool):
+    name = "diff_review"
+    CONTEXT_RETENTION_MARKER = "OBSOLETE-MARKER-0000"
+
+    def run(self, **kwargs):
+        return {"added_lines": 0, "deleted_lines": 0, "warnings": []}
+'''
+
+
+def _function_registry_py() -> str:
+    return '''"""Deprecated function registry adapter."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+
+class FunctionRegistry:
+    """Wrong adapter for final tool registration."""
+
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def register(self, name: str, fn: Callable[..., object]) -> None:
+        self.tools[name] = fn
+'''
+
+
 def _test_diff_review_tool_py() -> str:
     return '''from __future__ import annotations
 
@@ -425,55 +638,7 @@ PATCH_WITH_TODO = """diff --git a/alpha.py b/alpha.py
 """
 
 
-class DiffReviewToolTest(unittest.TestCase):
-    def _tool(self):
-        vault = CommandVault()
-        install_default_tools(vault)
-        tool = vault.get("diff_review")
-        self.assertIsInstance(tool, SentinelToolBase)
-        return tool
-
-    def test_counts_added_and_deleted_lines(self):
-        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH)
-        self.assertIsInstance(result, GuardedToolOutcome)
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(result.payload["added_lines"], 2)
-        self.assertEqual(result.payload["deleted_lines"], 1)
-        self.assertEqual(result.payload["warnings"], [])
-
-    def test_installed_once_with_canonical_contracts(self):
-        vault = CommandVault()
-        returned = install_default_tools(vault)
-
-        self.assertIs(returned, vault)
-        self.assertEqual(vault.names(), ["diff_review"])
-        tool = vault.get("diff_review")
-        self.assertIsInstance(tool, SentinelToolBase)
-        self.assertIsInstance(tool.config, MarchConfig)
-        self.assertEqual(legacy_registry.TOOLS, {})
-
-    def test_empty_patch_fails(self):
-        result = self._tool().execute(file_path="alpha.py", patch_text="   ")
-        self.assertIsInstance(result, GuardedToolOutcome)
-        self.assertFalse(result.ok)
-        self.assertIn("empty", result.error.lower())
-
-    def test_warnings_and_strict_mode(self):
-        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO)
-        self.assertTrue(result.ok, result.error)
-        self.assertGreaterEqual(len(result.payload["warnings"]), 1)
-
-        strict_result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO, strict=True)
-        self.assertIsInstance(strict_result, GuardedToolOutcome)
-        self.assertFalse(strict_result.ok)
-
-    def test_file_path_warning(self):
-        result = self._tool().execute(file_path="beta.py", patch_text=PATCH)
-        self.assertTrue(result.ok, result.error)
-        self.assertTrue(any("beta.py" in warning for warning in result.payload["warnings"]))
-
-    def test_multi_file_patch_counts_only_body_lines(self):
-        patch = """diff --git a/alpha.py b/alpha.py
+MULTI_FILE_PATCH = """diff --git a/alpha.py b/alpha.py
 --- a/alpha.py
 +++ b/alpha.py
 @@ -1 +1,2 @@
@@ -487,25 +652,108 @@ diff --git a/beta.py b/beta.py
 +new_beta = 2
  keep_beta = True
 """
-        result = self._tool().execute(file_path="alpha.py", patch_text=patch)
+
+
+class DiffReviewToolTest(unittest.TestCase):
+    def _tool(self):
+        vault = CommandVault()
+        returned = install_default_tools(vault)
+        self.assertIs(returned, vault)
+        tool = vault.get("diff_review")
+        self.assertIsInstance(tool, SentinelToolBase)
+        return tool
+
+    def test_installed_once_with_canonical_contracts(self):
+        vault = CommandVault()
+        install_default_tools(vault)
+
+        self.assertEqual(vault.names(), ["diff_review"])
+        tool = vault.get("diff_review")
+        self.assertIsInstance(tool.config, MarchConfig)
+        self.assertEqual(tool.config.audit_label, "march-diff-review")
+        self.assertEqual(tool.config.policy_version, "MARCH-AUDIT-V7")
+        self.assertEqual(legacy_registry.TOOLS, {})
+
+    def test_counts_added_and_deleted_lines(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH)
+
+        self.assertIsInstance(result, GuardedToolOutcome)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.payload["added_lines"], 2)
+        self.assertEqual(result.payload["deleted_lines"], 1)
+        self.assertEqual(result.payload["changed_files"], ["alpha.py"])
+        self.assertEqual(result.payload["warnings"], [])
+        self.assertEqual(result.payload["policy_version"], "MARCH-AUDIT-V7")
+
+    def test_empty_patch_fails(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text="   ")
+
+        self.assertIsInstance(result, GuardedToolOutcome)
+        self.assertFalse(result.ok)
+        self.assertIn("empty", result.error.lower())
+
+    def test_todo_warning_and_strict_mode(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO)
+
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(result.payload["warnings"]), 1)
+        warning = result.payload["warnings"][0]
+        self.assertEqual(warning["severity"], "warning")
+        self.assertIn("code", warning)
+        self.assertIn("TODO", warning["message"])
+
+        strict_result = self._tool().execute(file_path="alpha.py", patch_text=PATCH_WITH_TODO, strict=True)
+        self.assertIsInstance(strict_result, GuardedToolOutcome)
+        self.assertFalse(strict_result.ok)
+        self.assertIsNotNone(strict_result.payload)
+        self.assertEqual(len(strict_result.payload["warnings"]), 1)
+
+    def test_file_path_warning(self):
+        result = self._tool().execute(file_path="beta.py", patch_text=PATCH)
+
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(result.payload["warnings"]), 1)
+        warning = result.payload["warnings"][0]
+        self.assertEqual(warning["severity"], "warning")
+        self.assertIn("beta.py", warning["message"])
+
+    def test_multi_file_patch_counts_body_lines_and_changed_files(self):
+        result = self._tool().execute(file_path="alpha.py", patch_text=MULTI_FILE_PATCH)
 
         self.assertTrue(result.ok, result.error)
         self.assertEqual(result.payload["added_lines"], 2)
         self.assertEqual(result.payload["deleted_lines"], 1)
+        self.assertEqual(result.payload["changed_files"], ["alpha.py", "beta.py"])
         self.assertEqual(result.payload["warnings"], [])
-
-    def test_strict_failure_preserves_payload_for_debugging(self):
-        result = self._tool().execute(file_path="beta.py", patch_text=PATCH_WITH_TODO, strict=True)
-
-        self.assertFalse(result.ok)
-        self.assertIsNotNone(result.payload)
-        self.assertGreaterEqual(len(result.payload["warnings"]), 1)
 
 
 if __name__ == "__main__":
     unittest.main()
 '''
 
+
+def _test_audit_architecture_py() -> str:
+    return '''from __future__ import annotations
+
+import unittest
+
+from sentinel_lab.audit import DiffReviewTool
+from sentinel_lab.core import GuardedToolOutcome, SentinelToolBase
+
+
+class AuditArchitectureTest(unittest.TestCase):
+    def test_public_export_uses_canonical_contracts(self):
+        tool = DiffReviewTool()
+
+        self.assertIsInstance(tool, SentinelToolBase)
+        self.assertEqual(tool.name, "diff_review")
+        result = tool.execute(file_path="alpha.py", patch_text="   ")
+        self.assertIsInstance(result, GuardedToolOutcome)
+
+
+if __name__ == "__main__":
+    unittest.main()
+'''
 
 def _obsolete_tool_design_md() -> str:
     return """# Obsolete Tool Design
@@ -522,12 +770,29 @@ Deprecated ideas:
 """
 
 
+def _experimental_registry_notes_md() -> str:
+    return """# Experimental Registry Notes
+
+This document is intentionally stale.
+
+Rejected paths:
+
+- sentinel_lab.future_registry.install_future(...)
+- sentinel_lab.adapters.function_registry.FunctionRegistry
+- sentinel_lab.experimental.legacy_diff_review.LegacyDiffReviewTool
+- sentinel_lab/diff_review.py as a flat implementation file
+
+These names exist only to create realistic conflicts in a medium-sized fixture.
+"""
+
+
 def _migration_notes_md() -> str:
     return """# Migration Notes
 
 The current architecture is class-based and lives in sentinel_lab.core.
 The final implementation must use MarchConfig, SentinelToolBase, GuardedToolOutcome,
-and CommandVault.install.
+and CommandVault.install. The exact audit topology and warning taxonomy are
+conversation decisions, not fully duplicated in this file.
 """
 
 

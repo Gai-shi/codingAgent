@@ -13,6 +13,17 @@ from typing import Sequence
 
 
 FORBIDDEN_JSON_NAMES = {"config.json", "settings.json", "tool_config.json"}
+EXPECTED_DIFF_TOOL_RELATIVE_PATH = Path("sentinel_lab/audit/diff_review_tool.py")
+EXPECTED_SUPPORT_FILES = (
+    Path("sentinel_lab/audit/unified_diff_parser.py"),
+    Path("sentinel_lab/audit/warning_policy.py"),
+)
+EXPECTED_WARNING_CODES = (
+    "W-MARCH-FILE-337",
+    "W-MARCH-TODO-214",
+    "E-MARCH-STRICT-901",
+    "E-MARCH-EMPTY-044",
+)
 
 
 @dataclass
@@ -38,11 +49,19 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
 
     diff_tool_path, diff_tool_text = _find_diff_review_tool(target)
     bootstrap_text = _read_optional(bootstrap_path)
-    implementation_text = "\n".join([diff_tool_text, bootstrap_text])
+    implementation_text = _selected_implementation_text(target, diff_tool_path, bootstrap_text)
     diff_tool_tree = _parse_optional(diff_tool_text)
     diff_tool_class = _find_class(diff_tool_tree, "DiffReviewTool")
 
     _require(diff_tool_path is not None, "DiffReviewTool implementation file exists", required_hits, missing_required)
+    _require(
+        diff_tool_path is not None and diff_tool_path.relative_to(target) == EXPECTED_DIFF_TOOL_RELATIVE_PATH,
+        "DiffReviewTool uses approved audit topology path",
+        required_hits,
+        missing_required,
+    )
+    for support_file in EXPECTED_SUPPORT_FILES:
+        _require((target / support_file).is_file(), f"support file exists: {support_file}", required_hits, missing_required)
     _require(
         diff_tool_class is not None and _class_inherits(diff_tool_class, "SentinelToolBase"),
         "DiffReviewTool inherits SentinelToolBase",
@@ -72,15 +91,59 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         missing_required,
     )
     _require(
+        diff_tool_class is not None
+        and _class_string_attr(diff_tool_class, "TOPOLOGY_RETENTION_MARKER") == "MARCH-TOPOLOGY-3190",
+        "DiffReviewTool preserves topology retention marker",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        diff_tool_class is not None
+        and _class_string_attr(diff_tool_class, "POLICY_RETENTION_MARKER") == "MARCH-POLICY-2664",
+        "DiffReviewTool preserves warning policy retention marker",
+        required_hits,
+        missing_required,
+    )
+    _require(
         diff_tool_class is not None and _execute_returns_guarded_outcome(diff_tool_class),
         "DiffReviewTool.execute is annotated with GuardedToolOutcome",
         required_hits,
         missing_required,
     )
     _require(_bootstrap_installs_diff_review(bootstrap_text), "bootstrap registers via CommandVault.install", required_hits, missing_required)
+    _require(
+        "MarchConfig" in bootstrap_text
+        and "march-diff-review" in bootstrap_text
+        and "MARCH-AUDIT-V7" in bootstrap_text,
+        "bootstrap installs DiffReviewTool with approved MarchConfig",
+        required_hits,
+        missing_required,
+    )
+    _require(
+        "from .audit import DiffReviewTool" in bootstrap_text,
+        "bootstrap imports DiffReviewTool from audit package",
+        required_hits,
+        missing_required,
+    )
+    audit_init_text = _read_optional(target / "sentinel_lab" / "audit" / "__init__.py")
+    _require(
+        "from .diff_review_tool import DiffReviewTool" in audit_init_text and "__all__" in audit_init_text,
+        "audit package exports DiffReviewTool",
+        required_hits,
+        missing_required,
+    )
+    for code in EXPECTED_WARNING_CODES:
+        _require(code in implementation_text, f"warning policy preserves code: {code}", required_hits, missing_required)
+    _require("MARCH-AUDIT-V7" in implementation_text, "payload preserves policy version", required_hits, missing_required)
 
     if "legacy_registry" in implementation_text:
         forbidden_hits.append("forbidden import/reference: legacy_registry")
+    if "future_registry" in implementation_text:
+        forbidden_hits.append("forbidden import/reference: future_registry")
+    if "FunctionRegistry" in implementation_text or "function_registry" in implementation_text:
+        forbidden_hits.append("forbidden function registry adapter")
+    if "experimental" in implementation_text:
+        forbidden_hits.append("forbidden experimental package reference")
     if "BaseTool" in implementation_text:
         forbidden_hits.append("used obsolete BaseTool contract from noise")
     if "ToolResult" in implementation_text:
@@ -93,8 +156,12 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
         "OBSOLETE-MARKER-0000" in diff_tool_text
         or "JSON-LEGACY-1357" in diff_tool_text
         or "CONFIG-JSON-0000" in diff_tool_text
+        or "FLAT-TOOL-0000" in diff_tool_text
+        or "WARN-LEGACY-0000" in diff_tool_text
     ):
         forbidden_hits.append("used obsolete context marker from noise")
+    if "W-LEGACY-FILE" in implementation_text or "WARN_TODO_V1" in implementation_text or "E-JSON-STRICT" in implementation_text:
+        forbidden_hits.append("used obsolete warning code from noise")
     raw_return = _find_execute_raw_return(diff_tool_text)
     if raw_return:
         forbidden_hits.append(raw_return)
@@ -146,21 +213,36 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
 def _find_diff_review_tool(target: Path) -> tuple[Path | None, str]:
     """Find the implementation file that defines DiffReviewTool.
 
-    The benchmark should grade architecture/context retention, not force one
-    specific file name. A correct agent may reasonably choose diff_review.py,
-    diff_review_tool.py, or another non-legacy module.
+    The benchmark now requires the approved audit topology, but this function
+    still searches recursively so the grader can report both "class exists" and
+    "wrong path" diagnostics.
     """
     package_dir = target / "sentinel_lab"
     if not package_dir.exists():
         return None, ""
 
-    for path in sorted(package_dir.glob("*.py")):
-        if path.name in {"__init__.py", "core.py", "legacy_registry.py"}:
+    for path in sorted(package_dir.rglob("*.py")):
+        relative = path.relative_to(package_dir)
+        if relative.parts[0] in {"experimental", "adapters"}:
+            continue
+        if path.name in {"__init__.py", "core.py", "legacy_registry.py", "future_registry.py"}:
             continue
         text = _read_optional(path)
         if "class DiffReviewTool" in text:
             return path, text
     return None, ""
+
+
+def _selected_implementation_text(target: Path, diff_tool_path: Path | None, bootstrap_text: str) -> str:
+    """Return text from files that are part of the candidate final implementation."""
+    chunks = [bootstrap_text]
+    audit_dir = target / "sentinel_lab" / "audit"
+    if audit_dir.exists():
+        for path in sorted(audit_dir.rglob("*.py")):
+            chunks.append(_read_optional(path))
+    if diff_tool_path is not None and audit_dir not in diff_tool_path.parents:
+        chunks.append(_read_optional(diff_tool_path))
+    return "\n".join(chunks)
 
 
 def _find_execute_raw_return(source: str) -> str | None:

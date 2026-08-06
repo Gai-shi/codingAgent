@@ -17,9 +17,11 @@ pi 显式压缩上下文：预期成功
 1. 第一轮给出真正有效的架构约束；
 2. 早期约束里包含一个最终任务不会重复的 `CONTEXT_RETENTION_MARKER`；
 3. 中间插入大量“废弃设计/旧日志”噪声和伪造旧 marker；
-4. 中途更新一次决策，覆盖早期 JSON 配置方案，并给出最终任务不会重复的 `CONFIG_RETENTION_MARKER`；
-5. 最后一轮要求实现 `DiffReviewTool`，但不再重复关键架构类名和 marker；
-5. `grader.py` 检查最终代码是否遵守早期约束和最新决策。
+4. 中途追加实现拓扑决策：`DiffReviewTool` 必须进入 `sentinel_lab/audit/` 多文件布局，而不是旧扁平路径；
+5. 中途更新一次配置决策，覆盖早期 JSON 配置方案，并给出最终任务不会重复的 `CONFIG_RETENTION_MARKER`；
+6. 后段追加 warning taxonomy：精确 warning/error code、payload 形状、policy version；
+7. 最后一轮要求实现 `DiffReviewTool`，但不再重复精确 marker、warning code、policy version 或文件拓扑；
+8. `grader.py` 检查最终代码是否遵守早期约束和所有阶段性最新决策。
 
 关键对照是：
 
@@ -27,6 +29,15 @@ pi 显式压缩上下文：预期成功
 无压缩：完整历史必须原样进入后续请求；当真实历史超过模型上下文窗口时，任务会失败。
 有压缩：早期约束进入 summary，后续请求不需要携带完整噪声历史，最终仍能保留 marker 并实现正确架构。
 ```
+
+目标 fixture 已从单文件小项目升级为中等规模项目：它包含 canonical `core`、
+`audit` 包、`experimental` 干扰包、`future_registry`、function registry adapter
+和多份冲突文档。通过测试不再只靠两个 marker，还需要保留多阶段决策：
+
+- 扁平旧路径 vs `sentinel_lab/audit/` 拓扑；
+- JSON config vs `MarchConfig`；
+- legacy/function/future registry vs `CommandVault.install`；
+- 旧 warning code vs `W-MARCH-*` / `E-MARCH-*` taxonomy。
 
 ## 运行 ai_job 当前版本
 
@@ -150,15 +161,19 @@ python3 evals/context_compression_e2e/grader.py \
 
 判分包括：
 
-- 必须在 `sentinel_lab` 非 legacy 模块中存在 `class DiffReviewTool(SentinelToolBase)`；
+- 必须在 `sentinel_lab/audit/diff_review_tool.py` 存在 `class DiffReviewTool(SentinelToolBase)`；
+- 必须存在 `sentinel_lab/audit/unified_diff_parser.py` 和 `sentinel_lab/audit/warning_policy.py`；
+- `sentinel_lab/audit/__init__.py` 必须导出 `DiffReviewTool`；
 - 必须返回 `GuardedToolOutcome`；
 - 必须引用最新配置形态 `MarchConfig`；
 - 必须声明 `name = "diff_review"`；
 - `execute` 必须标注返回 `GuardedToolOutcome`；
 - 必须通过 `CommandVault.install(...)` 注册；
-- 必须保留早期 `CONTEXT_RETENTION_MARKER` 和中途 `CONFIG_RETENTION_MARKER`；
+- 必须用 `MarchConfig(audit_label="march-diff-review", policy_version="MARCH-AUDIT-V7")` 安装；
+- 必须保留早期 `CONTEXT_RETENTION_MARKER`、拓扑 `TOPOLOGY_RETENTION_MARKER`、中途 `CONFIG_RETENTION_MARKER` 和 policy `POLICY_RETENTION_MARKER`；
+- 必须保留 `W-MARCH-FILE-337`、`W-MARCH-TODO-214`、`E-MARCH-STRICT-901`、`E-MARCH-EMPTY-044`；
 - 不能新增 JSON 配置；
-- 禁止引用 `legacy_registry`；
+- 禁止引用 `legacy_registry`、`future_registry`、`FunctionRegistry` 或 `sentinel_lab.experimental`；
 - 禁止回退到噪声中的 `BaseTool` / `ToolResult`；
 - 目标仓库的 `unittest` 必须通过。
 
