@@ -92,7 +92,7 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                             with patch(
                                 "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
                             ) as session_cleanup_mock:
-                                with patch("ai_job.chat_cli.SessionRecorder.record_text") as record_text_mock:
+                                with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
                                     with patch("builtins.input", side_effect=EOFError):
                                         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                                             exit_code = main(["--workspace", tmp_dir])
@@ -112,8 +112,9 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             str(Path(tmp_dir).resolve()),
         )
         session_cleanup_mock.assert_called_once_with()
-        record_text_mock.assert_called_once()
-        self.assertEqual(record_text_mock.call_args.args[0], "SystemMessage")
+        record_session_mock.assert_called_once()
+        self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
+        self.assertTrue(record_session_mock.call_args.args[2])
 
 
 if __name__ == "__main__":

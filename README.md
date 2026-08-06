@@ -33,7 +33,7 @@
 - agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
 - 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
 - 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
-- 会话记录基础设施已独立到 `ai_job/infra/session_recording/` 包中，通用入口为 `SessionRecorder.record_text/record_json(...)`。
+- 会话记录基础设施已独立到 `ai_job/infra/session_recording/` 包中，通用入口为 `SessionRecorder.record_session(...)`。
 - 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。
 - HTTP 请求基础设施已独立到 `ai_job/infra/http/` 包中，`OpenAIModel` 默认使用 `UrlLibHttpClient`，测试时可注入 fake `BaseHttpClient`。
 

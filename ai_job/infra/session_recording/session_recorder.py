@@ -48,17 +48,15 @@ class SessionRecorder:
         return cls._session_path
 
     @classmethod
-    def record_text(cls, title: str, content: str) -> None:
+    def record_session(cls, title: str, par: Any, is_string_type: bool) -> None:
         cls._validate_string("title", title)
-        cls._validate_string("content", content)
-        cls._write_section(title=title, content=content, language="text")
-
-    @classmethod
-    def record_json(cls, title: str, payload: Any) -> None:
-        cls._validate_string("title", title)
+        if is_string_type:
+            cls._validate_string("par", par)
+            cls._write_section(title=title, content=par, language="text")
+            return
         cls._write_section(
             title=title,
-            content=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            content=json.dumps(par, ensure_ascii=False, indent=2, default=str),
             language="json",
         )
 

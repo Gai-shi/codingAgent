@@ -37,12 +37,13 @@ class AgentRunner:
 
             assistant_message = self._chat_model.complete(history, self._tool_registry)
             history.append(assistant_message)
-            SessionRecorder.record_json(
+            SessionRecorder.record_session(
                 "AssistantMessage",
                 {
                     "content": assistant_message.content,
                     "tool_calls": [asdict(tool_call) for tool_call in assistant_message.tool_calls],
                 },
+                False,
             )
 
             if not assistant_message.tool_calls:
@@ -61,7 +62,7 @@ class AgentRunner:
                         tool_call=tool_call,
                     ),
                 )
-                SessionRecorder.record_json(f"ToolCall {tool_call.name}", asdict(tool_call))
+                SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), False)
                 tool_content = self._tool_executor.execute(tool_call)
                 history.append(
                     ToolMessage(
@@ -69,7 +70,7 @@ class AgentRunner:
                         content=tool_content,
                     )
                 )
-                SessionRecorder.record_text(f"ToolResult {tool_call.name}", tool_content)
+                SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, True)
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
 
