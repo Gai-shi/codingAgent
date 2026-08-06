@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-CASE_ID = "tool_contract_drift_e2e_v3"
+CASE_ID = "tool_contract_drift_e2e_v4"
 DEFAULT_NOISE_ROUNDS = 10
 DEFAULT_NOISE_BLOCKS_PER_ROUND = 128
 DEFAULT_COMPACT_EVERY = 4
@@ -70,6 +70,7 @@ def build_prompt_turns(
     turns: list[PromptTurn] = [PromptTurn(kind="constraints", text=early_constraints_prompt())]
     effective_turn_index = 1
 
+    override_after_round = max(1, noise_rounds // 2)
     for round_index in range(1, noise_rounds + 1):
         turns.append(
             PromptTurn(
@@ -81,7 +82,7 @@ def build_prompt_turns(
         if _should_insert_compact(effective_turn_index, compact_every):
             turns.append(PromptTurn(kind="compact", text=compact_prompt()))
 
-        if round_index == noise_rounds // 2:
+        if round_index == override_after_round:
             turns.append(PromptTurn(kind="override", text=config_override_prompt()))
             effective_turn_index += 1
             if _should_insert_compact(effective_turn_index, compact_every):
@@ -93,6 +94,63 @@ def build_prompt_turns(
 
 def _should_insert_compact(effective_turn_index: int, compact_every: int | None) -> bool:
     return compact_every is not None and compact_every > 0 and effective_turn_index % compact_every == 0
+
+
+def resolve_noise_rounds_for_min_raw_history_chars(
+    *,
+    noise_rounds: int,
+    noise_blocks_per_round: int,
+    min_raw_history_chars: int | None,
+) -> int:
+    """Return enough noise rounds for a real, uncompressed raw-history pressure case.
+
+    这里不裁剪上下文、不模拟小窗口，只生成足够长的真实会话。若调用真实模型时
+    raw history 超过模型实际上下文窗口，无压缩 agent 会遇到真实 provider 的
+    context-length 失败；有压缩 agent 应通过周期性 compaction 让后续请求保持
+    在模型窗口内。
+    """
+    if min_raw_history_chars is None or min_raw_history_chars <= 0:
+        return noise_rounds
+
+    base_chars = len(early_constraints_prompt()) + len(config_override_prompt()) + len(final_task_prompt())
+    one_noise_round_chars = len(noise_prompt(round_index=1, blocks=noise_blocks_per_round))
+    if one_noise_round_chars <= 0:
+        return noise_rounds
+
+    remaining_chars = max(0, min_raw_history_chars - base_chars)
+    required_rounds = (remaining_chars + one_noise_round_chars - 1) // one_noise_round_chars
+    candidate = max(noise_rounds, required_rounds, 1)
+    while True:
+        turns = build_prompt_turns(
+            noise_rounds=candidate,
+            noise_blocks_per_round=noise_blocks_per_round,
+            compact_every=None,
+        )
+        if raw_ai_job_history_char_count(turns) >= min_raw_history_chars:
+            return candidate
+        candidate += 1
+
+
+def raw_ai_job_history_char_count(turns: Iterable[PromptTurn]) -> int:
+    """Approximate the raw user-history characters sent by an uncompressed ai_job run."""
+    return sum(len(text) for text in prompt_texts_for_ai_job(turns))
+
+
+def prompt_stats(turns: Sequence[PromptTurn]) -> dict[str, object]:
+    """Return stable prompt-size diagnostics for benchmark result files."""
+    ai_job_prompts = prompt_texts_for_ai_job(turns)
+    pi_prompts = prompt_texts_for_pi(turns)
+    kind_counts: dict[str, int] = {}
+    for turn in turns:
+        kind_counts[turn.kind] = kind_counts.get(turn.kind, 0) + 1
+    return {
+        "turn_count_with_compact": len(turns),
+        "turn_count_ai_job": len(ai_job_prompts),
+        "kind_counts": kind_counts,
+        "raw_ai_job_user_history_chars": sum(len(text) for text in ai_job_prompts),
+        "raw_pi_user_history_chars": sum(len(text) for text in pi_prompts),
+        "max_single_prompt_chars": max((len(text) for text in ai_job_prompts), default=0),
+    }
 
 
 def write_prompt_artifacts(
@@ -341,8 +399,9 @@ def _test_diff_review_tool_py() -> str:
 
 import unittest
 
+from sentinel_lab import legacy_registry
 from sentinel_lab.bootstrap import install_default_tools
-from sentinel_lab.core import CommandVault, GuardedToolOutcome, SentinelToolBase
+from sentinel_lab.core import CommandVault, GuardedToolOutcome, MarchConfig, SentinelToolBase
 
 
 PATCH = """diff --git a/alpha.py b/alpha.py
@@ -382,6 +441,17 @@ class DiffReviewToolTest(unittest.TestCase):
         self.assertEqual(result.payload["deleted_lines"], 1)
         self.assertEqual(result.payload["warnings"], [])
 
+    def test_installed_once_with_canonical_contracts(self):
+        vault = CommandVault()
+        returned = install_default_tools(vault)
+
+        self.assertIs(returned, vault)
+        self.assertEqual(vault.names(), ["diff_review"])
+        tool = vault.get("diff_review")
+        self.assertIsInstance(tool, SentinelToolBase)
+        self.assertIsInstance(tool.config, MarchConfig)
+        self.assertEqual(legacy_registry.TOOLS, {})
+
     def test_empty_patch_fails(self):
         result = self._tool().execute(file_path="alpha.py", patch_text="   ")
         self.assertIsInstance(result, GuardedToolOutcome)
@@ -401,6 +471,35 @@ class DiffReviewToolTest(unittest.TestCase):
         result = self._tool().execute(file_path="beta.py", patch_text=PATCH)
         self.assertTrue(result.ok, result.error)
         self.assertTrue(any("beta.py" in warning for warning in result.payload["warnings"]))
+
+    def test_multi_file_patch_counts_only_body_lines(self):
+        patch = """diff --git a/alpha.py b/alpha.py
+--- a/alpha.py
++++ b/alpha.py
+@@ -1 +1,2 @@
+ keep = True
++alpha_added = True
+diff --git a/beta.py b/beta.py
+--- a/beta.py
++++ b/beta.py
+@@ -1,2 +1,2 @@
+-old_beta = 1
++new_beta = 2
+ keep_beta = True
+"""
+        result = self._tool().execute(file_path="alpha.py", patch_text=patch)
+
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.payload["added_lines"], 2)
+        self.assertEqual(result.payload["deleted_lines"], 1)
+        self.assertEqual(result.payload["warnings"], [])
+
+    def test_strict_failure_preserves_payload_for_debugging(self):
+        result = self._tool().execute(file_path="beta.py", patch_text=PATCH_WITH_TODO, strict=True)
+
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.payload)
+        self.assertGreaterEqual(len(result.payload["warnings"]), 1)
 
 
 if __name__ == "__main__":
@@ -450,6 +549,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Replace output directory if it already exists.")
     parser.add_argument("--noise-rounds", type=int, default=DEFAULT_NOISE_ROUNDS)
     parser.add_argument("--noise-blocks-per-round", type=int, default=DEFAULT_NOISE_BLOCKS_PER_ROUND)
+    parser.add_argument(
+        "--min-raw-history-chars",
+        type=int,
+        default=None,
+        help=(
+            "Increase noise rounds until the uncompressed ai_job user-history "
+            "has at least this many characters. This creates a real long-context "
+            "case instead of clipping model-visible context."
+        ),
+    )
     parser.add_argument("--compact-every", type=int, default=DEFAULT_COMPACT_EVERY, help="Insert compact turn after every N non-compact turns. Use 0 to disable.")
     parser.add_argument(
         "--include-compact-turns",
@@ -464,13 +573,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
 
     target = create_case_workspace(output, force=args.force)
-    turns = build_prompt_turns(
+    noise_rounds = resolve_noise_rounds_for_min_raw_history_chars(
         noise_rounds=args.noise_rounds,
+        noise_blocks_per_round=args.noise_blocks_per_round,
+        min_raw_history_chars=args.min_raw_history_chars,
+    )
+    turns = build_prompt_turns(
+        noise_rounds=noise_rounds,
         noise_blocks_per_round=args.noise_blocks_per_round,
         compact_every=args.compact_every if args.compact_every > 0 else None,
     )
     write_prompt_artifacts(output, turns, include_compact_turns=args.include_compact_turns)
-    _write(output / "case_manifest.json", json.dumps({"case_id": CASE_ID, "target_repo": str(target)}, indent=2) + "\n")
+    _write(
+        output / "case_manifest.json",
+        json.dumps(
+            {
+                "case_id": CASE_ID,
+                "target_repo": str(target),
+                "noise_rounds": noise_rounds,
+                "noise_blocks_per_round": args.noise_blocks_per_round,
+                "prompt_stats": prompt_stats(turns),
+            },
+            indent=2,
+        )
+        + "\n",
+    )
     print(target)
     return 0
 

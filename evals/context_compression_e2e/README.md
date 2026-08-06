@@ -24,8 +24,8 @@ pi 显式压缩上下文：预期成功
 关键对照是：
 
 ```text
-无压缩：早期约束被长噪声挤出上下文，最终容易漏掉 marker 或走向 legacy_registry / JSON / dict 注册。
-有压缩：早期约束进入 summary，最终仍能保留 marker 并实现正确架构。
+无压缩：完整历史必须原样进入后续请求；当真实历史超过模型上下文窗口时，任务会失败。
+有压缩：早期约束进入 summary，后续请求不需要携带完整噪声历史，最终仍能保留 marker 并实现正确架构。
 ```
 
 ## 运行 ai_job 当前版本
@@ -48,6 +48,47 @@ python3 evals/context_compression_e2e/run_ai_job.py \
   --noise-blocks-per-round 192 \
   --compact-every 4
 ```
+
+注意：如果模型上下文窗口足够大，即使 ai_job 没有压缩能力也可能通过。这种
+结果是合理的：任务能放进窗口时，本来就不必为了压缩而压缩。
+
+## 真实超长历史压力测试
+
+如果你要验证“这个任务不压缩就无法取得预期效果”，应让**真实发送的原始历史**
+超过被测模型的上下文窗口，而不是裁剪模型可见上下文。可以用
+`--min-raw-history-chars` 自动增加噪声轮数：
+
+```bash
+python3 evals/context_compression_e2e/run_ai_job.py \
+  --output /tmp/ai_job_ctx_e2e_ai_job_overflow \
+  --force \
+  --noise-blocks-per-round 256 \
+  --min-raw-history-chars 1200000 \
+  --compact-every 4
+```
+
+这仍然调用真实 LLM，不做 fake，不裁剪上下文。当前无压缩 ai_job 会把完整
+历史原样发送给 provider；如果超过模型真实窗口，应出现 context-length 错误
+或最终无法完成任务。
+
+对应的 pi 对照：
+
+```bash
+python3 evals/context_compression_e2e/run_pi.py \
+  --output /tmp/ai_job_ctx_e2e_pi_overflow \
+  --force \
+  --provider openai \
+  --model gpt-5.5 \
+  --noise-blocks-per-round 256 \
+  --min-raw-history-chars 1200000 \
+  --compact-every 4
+```
+
+生成的 result JSON 会包含：
+
+- `noise_rounds`：为达到目标原始历史长度实际生成的噪声轮数；
+- `prompt_stats.raw_ai_job_user_history_chars`：无压缩 ai_job 等价原始用户历史字符数；
+- `grade`：最终仓库判分。
 
 ## 运行 pi
 
@@ -111,10 +152,14 @@ python3 evals/context_compression_e2e/grader.py \
 
 - 必须在 `sentinel_lab` 非 legacy 模块中存在 `class DiffReviewTool(SentinelToolBase)`；
 - 必须返回 `GuardedToolOutcome`；
+- 必须引用最新配置形态 `MarchConfig`；
+- 必须声明 `name = "diff_review"`；
+- `execute` 必须标注返回 `GuardedToolOutcome`；
 - 必须通过 `CommandVault.install(...)` 注册；
 - 必须保留早期 `CONTEXT_RETENTION_MARKER` 和中途 `CONFIG_RETENTION_MARKER`；
 - 不能新增 JSON 配置；
 - 禁止引用 `legacy_registry`；
+- 禁止回退到噪声中的 `BaseTool` / `ToolResult`；
 - 目标仓库的 `unittest` 必须通过。
 
 ## 结果解释
@@ -127,8 +172,8 @@ pi：PASS
 ai_job 加入上下文压缩后：PASS
 ```
 
-如果 `ai_job 当前版本` 也 PASS，优先说明模型上下文窗口仍覆盖了早期 marker；可以增加
-`--noise-rounds` 或 `--noise-blocks-per-round`，直到早期约束被挤出无压缩上下文。
+如果 `ai_job 当前版本` 也 PASS，优先说明这次任务仍然落在模型可承载范围内；
+可以增加 `--min-raw-history-chars`，直到原始历史超过被测模型真实上下文窗口。
 
 如果 `pi` 也 FAIL，优先看：
 

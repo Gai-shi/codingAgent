@@ -39,26 +39,52 @@ def grade_target(target: Path, *, run_tests: bool = True) -> GradeResult:
     diff_tool_path, diff_tool_text = _find_diff_review_tool(target)
     bootstrap_text = _read_optional(bootstrap_path)
     implementation_text = "\n".join([diff_tool_text, bootstrap_text])
+    diff_tool_tree = _parse_optional(diff_tool_text)
+    diff_tool_class = _find_class(diff_tool_tree, "DiffReviewTool")
 
     _require(diff_tool_path is not None, "DiffReviewTool implementation file exists", required_hits, missing_required)
-    _require("class DiffReviewTool(SentinelToolBase)" in diff_tool_text, "DiffReviewTool inherits SentinelToolBase", required_hits, missing_required)
-    _require("GuardedToolOutcome" in diff_tool_text, "DiffReviewTool references GuardedToolOutcome", required_hits, missing_required)
     _require(
-        "CONTEXT_RETENTION_MARKER" in diff_tool_text and "MARCH-CONTEXT-7429" in diff_tool_text,
+        diff_tool_class is not None and _class_inherits(diff_tool_class, "SentinelToolBase"),
+        "DiffReviewTool inherits SentinelToolBase",
+        required_hits,
+        missing_required,
+    )
+    _require(_references_name(diff_tool_tree, "GuardedToolOutcome"), "DiffReviewTool references GuardedToolOutcome", required_hits, missing_required)
+    _require(_references_name(diff_tool_tree, "MarchConfig"), "DiffReviewTool references MarchConfig", required_hits, missing_required)
+    _require(
+        diff_tool_class is not None and _class_string_attr(diff_tool_class, "name") == "diff_review",
+        'DiffReviewTool declares name = "diff_review"',
+        required_hits,
+        missing_required,
+    )
+    _require(
+        diff_tool_class is not None
+        and _class_string_attr(diff_tool_class, "CONTEXT_RETENTION_MARKER") == "MARCH-CONTEXT-7429",
         "DiffReviewTool preserves early context retention marker",
         required_hits,
         missing_required,
     )
     _require(
-        "CONFIG_RETENTION_MARKER" in diff_tool_text and "MARCH-CONFIG-5812" in diff_tool_text,
+        diff_tool_class is not None
+        and _class_string_attr(diff_tool_class, "CONFIG_RETENTION_MARKER") == "MARCH-CONFIG-5812",
         "DiffReviewTool preserves config override retention marker",
         required_hits,
         missing_required,
     )
-    _require(".install(" in bootstrap_text and "DiffReviewTool" in bootstrap_text, "bootstrap registers via CommandVault.install", required_hits, missing_required)
+    _require(
+        diff_tool_class is not None and _execute_returns_guarded_outcome(diff_tool_class),
+        "DiffReviewTool.execute is annotated with GuardedToolOutcome",
+        required_hits,
+        missing_required,
+    )
+    _require(_bootstrap_installs_diff_review(bootstrap_text), "bootstrap registers via CommandVault.install", required_hits, missing_required)
 
     if "legacy_registry" in implementation_text:
         forbidden_hits.append("forbidden import/reference: legacy_registry")
+    if "BaseTool" in implementation_text:
+        forbidden_hits.append("used obsolete BaseTool contract from noise")
+    if "ToolResult" in implementation_text:
+        forbidden_hits.append("used obsolete ToolResult contract from noise")
     if "dict[str, Callable]" in implementation_text:
         forbidden_hits.append("forbidden callable registry type: dict[str, Callable]")
     if "register(\"diff_review\"" in implementation_text or "register('diff_review'" in implementation_text:
@@ -163,6 +189,100 @@ def _find_execute_raw_return(source: str) -> str | None:
                         if isinstance(value, ast.Constant) and isinstance(value.value, str):
                             return "execute returns raw str"
                     return None
+    return None
+
+
+def _parse_optional(source: str) -> ast.Module | None:
+    if not source.strip():
+        return None
+    try:
+        return ast.parse(source)
+    except SyntaxError:
+        return None
+
+
+def _find_class(tree: ast.Module | None, name: str) -> ast.ClassDef | None:
+    if tree is None:
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    return None
+
+
+def _class_inherits(node: ast.ClassDef, base_name: str) -> bool:
+    return any(_name_of_expr(base) == base_name for base in node.bases)
+
+
+def _class_string_attr(node: ast.ClassDef, attr_name: str) -> str | None:
+    for item in node.body:
+        targets: list[ast.expr] = []
+        value: ast.expr | None = None
+        if isinstance(item, ast.Assign):
+            targets = list(item.targets)
+            value = item.value
+        elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            targets = [item.target]
+            value = item.value
+        if value is None:
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == attr_name for target in targets):
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
+
+
+def _references_name(tree: ast.Module | None, name: str) -> bool:
+    if tree is None:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == name:
+            return True
+    return False
+
+
+def _execute_returns_guarded_outcome(node: ast.ClassDef) -> bool:
+    for item in node.body:
+        if isinstance(item, ast.FunctionDef) and item.name == "execute":
+            return _annotation_name(item.returns) == "GuardedToolOutcome"
+    return False
+
+
+def _annotation_name(annotation: ast.expr | None) -> str | None:
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Name):
+        return annotation.id
+    if isinstance(annotation, ast.Attribute):
+        return annotation.attr
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        return annotation.value
+    return None
+
+
+def _bootstrap_installs_diff_review(source: str) -> bool:
+    tree = _parse_optional(source)
+    if tree is None:
+        return False
+    saw_install_call = False
+    saw_diff_review = _references_name(tree, "DiffReviewTool")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "install":
+            saw_install_call = True
+    return saw_install_call and saw_diff_review
+
+
+def _name_of_expr(expr: ast.expr) -> str | None:
+    if isinstance(expr, ast.Name):
+        return expr.id
+    if isinstance(expr, ast.Attribute):
+        return expr.attr
     return None
 
 

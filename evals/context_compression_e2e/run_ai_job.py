@@ -21,9 +21,25 @@ from typing import Sequence
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from benchmark_case import build_prompt_turns, create_case_workspace, prompt_texts_for_ai_job, write_prompt_artifacts
-from grader import grade_target
+    from benchmark_case import (
+        build_prompt_turns,
+        create_case_workspace,
+        prompt_stats,
+        prompt_texts_for_ai_job,
+        resolve_noise_rounds_for_min_raw_history_chars,
+        write_prompt_artifacts,
+    )
+    from grader import grade_target
+else:
+    from .benchmark_case import (
+        build_prompt_turns,
+        create_case_workspace,
+        prompt_stats,
+        prompt_texts_for_ai_job,
+        resolve_noise_rounds_for_min_raw_history_chars,
+        write_prompt_artifacts,
+    )
+    from .grader import grade_target
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -32,6 +48,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Replace output directory if it exists.")
     parser.add_argument("--noise-rounds", type=int, default=8)
     parser.add_argument("--noise-blocks-per-round", type=int, default=128)
+    parser.add_argument(
+        "--min-raw-history-chars",
+        type=int,
+        default=None,
+        help=(
+            "Increase generated noise until the uncompressed ai_job user-history "
+            "has at least this many characters. This uses the real provider "
+            "context limit; it does not clip or fake model-visible context."
+        ),
+    )
     parser.add_argument("--compact-every", type=int, default=4, help="Insert compact turn after every N non-compact turns. ai_job runner skips compact turns.")
     parser.add_argument(
         "--ai-job-command",
@@ -54,8 +80,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
 
     target = create_case_workspace(output, force=True)
-    turns = build_prompt_turns(
+    noise_rounds = resolve_noise_rounds_for_min_raw_history_chars(
         noise_rounds=args.noise_rounds,
+        noise_blocks_per_round=args.noise_blocks_per_round,
+        min_raw_history_chars=args.min_raw_history_chars,
+    )
+    turns = build_prompt_turns(
+        noise_rounds=noise_rounds,
         noise_blocks_per_round=args.noise_blocks_per_round,
         compact_every=args.compact_every if args.compact_every > 0 else None,
     )
@@ -89,6 +120,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "command": cmd,
         "exit_code": completed.returncode,
         "target": str(target),
+        "noise_rounds": noise_rounds,
+        "noise_blocks_per_round": args.noise_blocks_per_round,
+        "prompt_stats": prompt_stats(turns),
         "grade": asdict(grade),
     }
     (output / "result_ai_job.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

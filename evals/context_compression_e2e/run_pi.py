@@ -15,9 +15,25 @@ from typing import Sequence
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from benchmark_case import build_prompt_turns, create_case_workspace, prompt_texts_for_pi, write_prompt_artifacts
-from grader import grade_target
+    from benchmark_case import (
+        build_prompt_turns,
+        create_case_workspace,
+        prompt_stats,
+        prompt_texts_for_pi,
+        resolve_noise_rounds_for_min_raw_history_chars,
+        write_prompt_artifacts,
+    )
+    from grader import grade_target
+else:
+    from .benchmark_case import (
+        build_prompt_turns,
+        create_case_workspace,
+        prompt_stats,
+        prompt_texts_for_pi,
+        resolve_noise_rounds_for_min_raw_history_chars,
+        write_prompt_artifacts,
+    )
+    from .grader import grade_target
 
 
 DEFAULT_PI_COMMAND = "/Users/bytedance/Documents/AI_Projects/storage/pi/pi-test.sh"
@@ -29,6 +45,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Replace output directory if it exists.")
     parser.add_argument("--noise-rounds", type=int, default=8)
     parser.add_argument("--noise-blocks-per-round", type=int, default=128)
+    parser.add_argument(
+        "--min-raw-history-chars",
+        type=int,
+        default=None,
+        help=(
+            "Increase generated noise until the equivalent uncompressed ai_job "
+            "user-history has at least this many characters. pi still receives "
+            "real prompts and explicit compaction turns."
+        ),
+    )
     parser.add_argument("--compact-every", type=int, default=4, help="Insert /bench-compact after every N non-compact turns. Use 0 to disable.")
     parser.add_argument("--pi-command", default=DEFAULT_PI_COMMAND, help="pi command, e.g. /path/to/pi-test.sh.")
     parser.add_argument("--provider", default=None, help="Optional pi provider.")
@@ -51,8 +77,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
 
     target = create_case_workspace(output, force=True)
-    turns = build_prompt_turns(
+    noise_rounds = resolve_noise_rounds_for_min_raw_history_chars(
         noise_rounds=args.noise_rounds,
+        noise_blocks_per_round=args.noise_blocks_per_round,
+        min_raw_history_chars=args.min_raw_history_chars,
+    )
+    turns = build_prompt_turns(
+        noise_rounds=noise_rounds,
         noise_blocks_per_round=args.noise_blocks_per_round,
         compact_every=args.compact_every if args.compact_every > 0 else None,
     )
@@ -108,6 +139,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "session_dir": str(session_dir),
         "target": str(target),
         "turns": turn_results,
+        "noise_rounds": noise_rounds,
+        "noise_blocks_per_round": args.noise_blocks_per_round,
+        "prompt_stats": prompt_stats(turns),
         "grade": asdict(grade),
     }
     (output / "result_pi.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
