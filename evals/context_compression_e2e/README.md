@@ -103,6 +103,7 @@ python3 evals/context_compression_e2e/run_pi.py \
 
 - `noise_rounds`：为达到目标原始历史长度实际生成的噪声轮数；
 - `prompt_stats.raw_ai_job_user_history_chars`：无压缩 ai_job 等价原始用户历史字符数；
+- `diagnostics`：从 ai_job stderr / session record 提取的高信号失败原因，例如 context length、模型权限、apply_patch 格式或 hunk 计数错误；
 - `grade`：最终仓库判分。
 
 ## 运行 pi
@@ -198,6 +199,13 @@ ai_job 加入上下文压缩后：PASS
 
 如果 `ai_job 当前版本` 也 PASS，优先说明这次任务仍然落在模型可承载范围内；
 可以增加 `--min-raw-history-chars`，直到原始历史超过被测模型真实上下文窗口。
+
+如果 `grade` 是 FAIL，先看 `result_ai_job.json` 里的 `diagnostics`：
+
+- `context_length_exceeded_count > 0`：说明无压缩历史已经超过真实模型窗口；
+- `apply_patch_begin_patch_format_error_count > 0`：说明模型把 Codex 风格 `*** Begin Patch` 误传给 ai_job 的 git-diff-only `apply_patch`；
+- `apply_patch_hunk_count_error_count > 0`：说明模型生成的 git diff hunk 行数不一致；
+- `model_permission_error_count > 0`：说明本次还混入了 provider/model 权限问题，不能只按代码能力解释。
 
 如果 `pi` 也 FAIL，优先看：
 

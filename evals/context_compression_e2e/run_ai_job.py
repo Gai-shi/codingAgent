@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -125,6 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     (output / "ai_job_stdout.txt").write_text(completed.stdout, encoding="utf-8")
     (output / "ai_job_stderr.txt").write_text(completed.stderr, encoding="utf-8")
+    diagnostics = collect_run_diagnostics(completed.stdout, completed.stderr)
     grade = grade_target(target)
     result = {
         "runner": "ai_job",
@@ -134,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "noise_rounds": noise_rounds,
         "noise_blocks_per_round": args.noise_blocks_per_round,
         "prompt_stats": prompt_stats(turns),
+        "diagnostics": diagnostics,
         "grade": asdict(grade),
     }
     (output / "result_ai_job.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -144,6 +147,50 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _flatten_for_line_cli(text: str) -> str:
     """ai_job currently reads one prompt with input(), so each turn must be one line."""
     return text.replace("\\", "\\\\").replace("\r\n", "\n").replace("\n", "\\n")
+
+
+def collect_run_diagnostics(stdout: str, stderr: str) -> dict[str, object]:
+    """Extract high-signal failure diagnostics from ai_job output artifacts."""
+    session_record = _extract_banner_path(stdout, "session_record")
+    log_file = _extract_banner_path(stdout, "log_file")
+    session_text = _read_text_if_present(session_record)
+    apply_patch_error_sections = _tool_result_error_count(session_text, "apply_patch")
+    return {
+        "log_file": log_file,
+        "session_record": session_record,
+        "llm_request_failed_count": stderr.count("LLM 请求失败"),
+        "context_length_exceeded_count": stderr.count("context_length_exceeded"),
+        "model_permission_error_count": stderr.count("no model permission"),
+        "tool_error_count": len(re.findall(r"\nError: ", session_text)),
+        "apply_patch_error_count": apply_patch_error_sections,
+        "apply_patch_begin_patch_format_error_count": session_text.count("expected 'diff --git' header"),
+        "apply_patch_hunk_count_error_count": len(re.findall(r"hunk at line \d+ declares", session_text)),
+    }
+
+
+def _extract_banner_path(stdout: str, label: str) -> str | None:
+    prefix = f"{label}: "
+    for line in stdout.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return None
+
+
+def _read_text_if_present(path_text: str | None) -> str:
+    if not path_text:
+        return ""
+    path = Path(path_text)
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _tool_result_error_count(session_text: str, tool_name: str) -> int:
+    pattern = re.compile(rf"## .* ToolResult {re.escape(tool_name)}\n\n```text\nError:", re.MULTILINE)
+    return len(pattern.findall(session_text))
 
 
 def _run_command_with_progress(

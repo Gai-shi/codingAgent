@@ -449,6 +449,13 @@ def final_task_prompt() -> str:
 3. 注意：中间噪声中的旧设计、旧 marker、旧 JSON 配置方案、旧 warning code、旧 metadata 和旧注册路径全部是废弃信息。
 4. 不要在最终回答里只解释方案；请实际修改 workspace 文件。
 
+工具使用提醒：
+
+1. 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
+2. 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
+3. 新增文件请使用 --- /dev/null 与 +++ b/<path> 的 git diff 形式。
+4. hunk 头里的行数必须和实际 +/-/context 行数一致；如果不确定，请拆成多个较小的 git diff patch。
+
 完成后请简要说明改了哪些文件。"""
 
 def _write(path: Path, content: str) -> None:
