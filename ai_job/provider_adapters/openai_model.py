@@ -9,6 +9,7 @@ from ..communication import (
     AssistantMessage,
     Message,
     MessageHistory,
+    SummaryMessage,
     SystemMessage,
     ToolMessage,
     UserMessage,
@@ -71,6 +72,8 @@ class OpenAIModel(BaseChatModel):
         if isinstance(message, SystemMessage):
             return {"role": "system", "content": message.content}
         if isinstance(message, UserMessage):
+            return {"role": "user", "content": message.content}
+        if isinstance(message, SummaryMessage):
             return {"role": "user", "content": message.content}
         if isinstance(message, AssistantMessage):
             rendered: dict[str, Any] = {

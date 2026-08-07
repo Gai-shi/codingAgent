@@ -5,6 +5,7 @@ import unittest
 
 from ai_job.communication import (
     AssistantMessage,
+    SummaryMessage,
     SystemMessage,
     ToolMessage,
     UserMessage,
@@ -67,6 +68,7 @@ class MessageDebugTest(unittest.TestCase):
         history = [
             SystemMessage(content="system"),
             UserMessage(content="user"),
+            SummaryMessage(content="compressed history"),
             AssistantMessage(
                 content=None,
                 tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "你好"})],
@@ -78,10 +80,11 @@ class MessageDebugTest(unittest.TestCase):
 
         self.assertEqual(result[0], {"role": "system", "content": "system"})
         self.assertEqual(result[1], {"role": "user", "content": "user"})
-        self.assertEqual(result[2]["role"], "assistant")
-        self.assertEqual(result[2]["tool_calls"][0]["arguments"], {"text": "你好"})
+        self.assertEqual(result[2], {"role": "summary", "content": "compressed history"})
+        self.assertEqual(result[3]["role"], "assistant")
+        self.assertEqual(result[3]["tool_calls"][0]["arguments"], {"text": "你好"})
         self.assertEqual(
-            result[3],
+            result[4],
             {"role": "tool", "tool_call_id": "call-1", "content": "result"},
         )
 
@@ -155,6 +158,7 @@ class OpenAIModelTest(unittest.TestCase):
         history = [
             SystemMessage(content="sys"),
             UserMessage(content="hi"),
+            SummaryMessage(content="compressed history"),
             AssistantMessage(
                 content=None,
                 tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "question"})],
@@ -182,10 +186,14 @@ class OpenAIModelTest(unittest.TestCase):
             call["payload"]["messages"][1],
             {"role": "user", "content": "hi"},
         )
-        self.assertEqual(call["payload"]["messages"][2]["role"], "assistant")
-        self.assertEqual(call["payload"]["messages"][2]["tool_calls"][0]["id"], "call-1")
         self.assertEqual(
-            call["payload"]["messages"][3],
+            call["payload"]["messages"][2],
+            {"role": "user", "content": "compressed history"},
+        )
+        self.assertEqual(call["payload"]["messages"][3]["role"], "assistant")
+        self.assertEqual(call["payload"]["messages"][3]["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(
+            call["payload"]["messages"][4],
             {"role": "tool", "tool_call_id": "call-1", "content": "tool result"},
         )
         self.assertEqual(call["payload"]["tools"][0]["function"]["name"], "example")

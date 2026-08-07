@@ -23,6 +23,13 @@ class UserMessage:
 
 
 @dataclass(frozen=True)
+class SummaryMessage:
+    """Compressed conversation context produced by the agent."""
+
+    content: str
+
+
+@dataclass(frozen=True)
 class AssistantMessage:
     """Provider-normalized assistant message returned by a chat model."""
 
@@ -38,7 +45,7 @@ class ToolMessage:
     content: str
 
 
-Message = Union[SystemMessage, UserMessage, AssistantMessage, ToolMessage]
+Message = Union[SystemMessage, UserMessage, SummaryMessage, AssistantMessage, ToolMessage]
 MessageHistory = list[Message]
 
 
@@ -48,6 +55,8 @@ def message_to_debug_dict(message: Message) -> dict[str, Any]:
         return {"role": "system", "content": message.content}
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.content}
+    if isinstance(message, SummaryMessage):
+        return {"role": "summary", "content": message.content}
     if isinstance(message, AssistantMessage):
         return {
             "role": "assistant",
