@@ -26,7 +26,8 @@ class UserMessage:
 class SummaryMessage:
     """Compressed conversation context produced by the agent."""
 
-    content: str
+    complete_turn_summary: str
+    split_turn_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,11 @@ def message_to_debug_dict(message: Message) -> dict[str, Any]:
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.content}
     if isinstance(message, SummaryMessage):
-        return {"role": "summary", "content": message.content}
+        return {
+            "role": "summary",
+            "complete_turn_summary": message.complete_turn_summary,
+            "split_turn_summary": message.split_turn_summary,
+        }
     if isinstance(message, AssistantMessage):
         return {
             "role": "assistant",

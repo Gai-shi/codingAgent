@@ -74,7 +74,7 @@ class OpenAIModel(BaseChatModel):
         if isinstance(message, UserMessage):
             return {"role": "user", "content": message.content}
         if isinstance(message, SummaryMessage):
-            return {"role": "user", "content": message.content}
+            return {"role": "user", "content": self._render_summary_content(message)}
         if isinstance(message, AssistantMessage):
             rendered: dict[str, Any] = {
                 "role": "assistant",
@@ -94,6 +94,24 @@ class OpenAIModel(BaseChatModel):
             }
 
         raise TypeError(f"unknown message type: {type(message).__name__}")
+
+    @staticmethod
+    def _render_summary_content(message: SummaryMessage) -> str:
+        parts = [
+            "以下是之前对话的压缩摘要。",
+            "",
+            "完整回合摘要：",
+            message.complete_turn_summary,
+        ]
+        if message.split_turn_summary is not None:
+            parts.extend(
+                [
+                    "",
+                    "当前未完整保留回合的前半段摘要：",
+                    message.split_turn_summary,
+                ]
+            )
+        return "\n".join(parts)
 
     def _parse_assistant_message(self, response_body: str) -> AssistantMessage:
         try:

@@ -68,7 +68,10 @@ class MessageDebugTest(unittest.TestCase):
         history = [
             SystemMessage(content="system"),
             UserMessage(content="user"),
-            SummaryMessage(content="compressed history"),
+            SummaryMessage(
+                complete_turn_summary="complete history",
+                split_turn_summary="partial turn",
+            ),
             AssistantMessage(
                 content=None,
                 tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "你好"})],
@@ -80,7 +83,14 @@ class MessageDebugTest(unittest.TestCase):
 
         self.assertEqual(result[0], {"role": "system", "content": "system"})
         self.assertEqual(result[1], {"role": "user", "content": "user"})
-        self.assertEqual(result[2], {"role": "summary", "content": "compressed history"})
+        self.assertEqual(
+            result[2],
+            {
+                "role": "summary",
+                "complete_turn_summary": "complete history",
+                "split_turn_summary": "partial turn",
+            },
+        )
         self.assertEqual(result[3]["role"], "assistant")
         self.assertEqual(result[3]["tool_calls"][0]["arguments"], {"text": "你好"})
         self.assertEqual(
@@ -158,7 +168,10 @@ class OpenAIModelTest(unittest.TestCase):
         history = [
             SystemMessage(content="sys"),
             UserMessage(content="hi"),
-            SummaryMessage(content="compressed history"),
+            SummaryMessage(
+                complete_turn_summary="complete history",
+                split_turn_summary="partial turn",
+            ),
             AssistantMessage(
                 content=None,
                 tool_calls=[ToolCall(id="call-1", name="example", arguments={"text": "question"})],
@@ -188,7 +201,18 @@ class OpenAIModelTest(unittest.TestCase):
         )
         self.assertEqual(
             call["payload"]["messages"][2],
-            {"role": "user", "content": "compressed history"},
+            {
+                "role": "user",
+                "content": (
+                    "以下是之前对话的压缩摘要。\n"
+                    "\n"
+                    "完整回合摘要：\n"
+                    "complete history\n"
+                    "\n"
+                    "当前未完整保留回合的前半段摘要：\n"
+                    "partial turn"
+                ),
+            },
         )
         self.assertEqual(call["payload"]["messages"][3]["role"], "assistant")
         self.assertEqual(call["payload"]["messages"][3]["tool_calls"][0]["id"], "call-1")
@@ -197,6 +221,30 @@ class OpenAIModelTest(unittest.TestCase):
             {"role": "tool", "tool_call_id": "call-1", "content": "tool result"},
         )
         self.assertEqual(call["payload"]["tools"][0]["function"]["name"], "example")
+
+    def test_complete_renders_summary_without_split_turn_as_user_message(self):
+        fake_http_client = FakeHttpClient(
+            json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi"}}]})
+        )
+        model = OpenAIModel(make_app_env(), http_client=fake_http_client)
+
+        model.complete(
+            [SummaryMessage(complete_turn_summary="complete history")],
+            ToolRegistry([]),
+        )
+
+        self.assertEqual(
+            fake_http_client.calls[0]["payload"]["messages"][0],
+            {
+                "role": "user",
+                "content": (
+                    "以下是之前对话的压缩摘要。\n"
+                    "\n"
+                    "完整回合摘要：\n"
+                    "complete history"
+                ),
+            },
+        )
 
     def test_complete_parses_tool_calls_without_text(self):
         fake_http_client = FakeHttpClient(
