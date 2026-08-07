@@ -129,6 +129,30 @@ class AgentRunnerTest(unittest.TestCase):
             log_text,
         )
 
+    def test_run_turn_sends_system_and_messages_from_context_start_index(self):
+        registry = ToolRegistry([])
+        model = ScriptedChatModel([AssistantMessage(content="done")])
+        runner = AgentRunner(
+            chat_model=model,
+            tool_registry=registry,
+            tool_executor=ToolExecutor(registry),
+            max_tool_rounds=1,
+            context_start_index=3,
+        )
+        old_user_message = UserMessage(content="old user")
+        history = [
+            SystemMessage(content="sys"),
+            old_user_message,
+            AssistantMessage(content="old assistant"),
+            UserMessage(content="active user"),
+        ]
+
+        runner.run_turn(history)
+
+        self.assertEqual(model.seen_histories[0][0], SystemMessage(content="sys"))
+        self.assertNotIn(old_user_message, model.seen_histories[0])
+        self.assertEqual(model.seen_histories[0][1], UserMessage(content="active user"))
+
     def test_run_turn_rejects_final_assistant_without_text(self):
         registry = ToolRegistry([])
         runner = AgentRunner(

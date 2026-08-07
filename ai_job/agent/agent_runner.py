@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from ..communication import MessageHistory, ToolMessage
+from ..communication import MessageHistory, SystemMessage, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
@@ -23,11 +23,13 @@ class AgentRunner:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         max_tool_rounds: int,
+        context_start_index: int = 0,
     ) -> None:
         self._chat_model = chat_model
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._max_tool_rounds = max_tool_rounds
+        self._context_start_index = context_start_index
 
     def run_turn(self, history: MessageHistory) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
@@ -35,7 +37,7 @@ class AgentRunner:
             round_number = round_index + 1
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
-            assistant_message = self._chat_model.complete(history, self._tool_registry)
+            assistant_message = self._chat_model.complete(self._build_model_history(history), self._tool_registry)
             history.append(assistant_message)
             SessionRecorder.record_session(
                 "AssistantMessage",
@@ -73,6 +75,15 @@ class AgentRunner:
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
+
+    def _build_model_history(self, history: MessageHistory) -> MessageHistory:
+        if not history:
+            return []
+
+        active_messages = history[self._context_start_index :]
+        if self._context_start_index > 0 and isinstance(history[0], SystemMessage):
+            return [history[0], *active_messages]
+        return active_messages
 
     @staticmethod
     def _tool_call_log_line(
