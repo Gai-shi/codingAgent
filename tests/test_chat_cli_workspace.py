@@ -114,7 +114,7 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         session_cleanup_mock.assert_called_once_with()
         record_session_mock.assert_called_once()
         self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
-        self.assertTrue(record_session_mock.call_args.args[2])
+        self.assertEqual(record_session_mock.call_args.args[2], "text")
 
 
 if __name__ == "__main__":

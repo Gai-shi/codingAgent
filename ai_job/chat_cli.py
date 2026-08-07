@@ -139,7 +139,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     messages = build_initial_messages(app_env, workspace_root)
-    SessionRecorder.record_session("SystemMessage", messages[0].content, True)
+    SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
     tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
@@ -174,7 +174,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         turn_start = len(messages)
         messages.append(UserMessage(content=user_text))
-        SessionRecorder.record_session("UserMessage", user_text, True)
+        SessionRecorder.record_session("UserMessage", user_text, "text")
         try:
             with SuppressInputEchoAndDiscard():
                 assistant_text = agent_runner.run_turn(messages)
