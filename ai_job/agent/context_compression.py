@@ -42,6 +42,38 @@ class CompressionPlan:
     keep_range: MessageRange
 
 
+@dataclass(frozen=True)
+class CompressionTrigger:
+    """Token threshold check result for the current active context."""
+
+    compression_threshold: int
+    active_context_tokens: int
+    should_compress: bool
+
+
+def check_compression_trigger(
+    active_context: MessageHistory,
+    context_window: int,
+    reserve_token: int,
+    token_counter: TokenCounter,
+) -> CompressionTrigger:
+    """Check whether the current active context crosses the compression threshold."""
+    if context_window <= 0:
+        raise ValueError("context_window must be positive")
+    if reserve_token < 0:
+        raise ValueError("reserve_token must be non-negative")
+    if reserve_token >= context_window:
+        raise ValueError("reserve_token must be smaller than context_window")
+
+    compression_threshold = context_window - reserve_token
+    active_context_tokens = _count_tokens(active_context, token_counter)
+    return CompressionTrigger(
+        compression_threshold=compression_threshold,
+        active_context_tokens=active_context_tokens,
+        should_compress=active_context_tokens > compression_threshold,
+    )
+
+
 def build_compression_plan(
     history: MessageHistory,
     context_start_index: int,
@@ -78,6 +110,16 @@ def _compressible_start(history: MessageHistory, context_start_index: int) -> in
     if context_start_index == 0 and history and isinstance(history[0], SystemMessage):
         return 1
     return context_start_index
+
+
+def _count_tokens(messages: MessageHistory, token_counter: TokenCounter) -> int:
+    token_total = 0
+    for message in messages:
+        token_count = token_counter(message)
+        if token_count < 0:
+            raise ValueError("token_counter must not return negative counts")
+        token_total += token_count
+    return token_total
 
 
 def _raw_keep_start(

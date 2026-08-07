@@ -2,13 +2,74 @@ from __future__ import annotations
 
 import unittest
 
-from ai_job.agent.context_compression import CompressionPlan, MessageRange, build_compression_plan
+from ai_job.agent.context_compression import (
+    CompressionPlan,
+    CompressionTrigger,
+    MessageRange,
+    build_compression_plan,
+    check_compression_trigger,
+)
 from ai_job.communication import AssistantMessage, SummaryMessage, SystemMessage, ToolMessage, UserMessage
 from ai_job.tools import ToolCall
 
 
 def one_token(_message):
     return 1
+
+
+class ContextCompressionTriggerTest(unittest.TestCase):
+    def test_check_trigger_compresses_only_when_tokens_exceed_threshold(self):
+        active_context = [
+            SystemMessage(content="sys"),
+            UserMessage(content="hello"),
+            AssistantMessage(content="hi"),
+        ]
+
+        self.assertEqual(
+            check_compression_trigger(
+                active_context=active_context,
+                context_window=5,
+                reserve_token=2,
+                token_counter=one_token,
+            ),
+            CompressionTrigger(
+                compression_threshold=3,
+                active_context_tokens=3,
+                should_compress=False,
+            ),
+        )
+        self.assertEqual(
+            check_compression_trigger(
+                active_context=active_context,
+                context_window=4,
+                reserve_token=2,
+                token_counter=one_token,
+            ),
+            CompressionTrigger(
+                compression_threshold=2,
+                active_context_tokens=3,
+                should_compress=True,
+            ),
+        )
+
+    def test_check_trigger_rejects_invalid_window_settings(self):
+        active_context = [UserMessage(content="hello")]
+
+        with self.assertRaisesRegex(ValueError, "context_window must be positive"):
+            check_compression_trigger(active_context, 0, 0, one_token)
+        with self.assertRaisesRegex(ValueError, "reserve_token must be non-negative"):
+            check_compression_trigger(active_context, 10, -1, one_token)
+        with self.assertRaisesRegex(ValueError, "reserve_token must be smaller"):
+            check_compression_trigger(active_context, 10, 10, one_token)
+
+    def test_check_trigger_rejects_negative_token_count(self):
+        with self.assertRaisesRegex(ValueError, "token_counter must not return negative"):
+            check_compression_trigger(
+                active_context=[UserMessage(content="hello")],
+                context_window=10,
+                reserve_token=1,
+                token_counter=lambda _message: -1,
+            )
 
 
 class ContextCompressionPlanTest(unittest.TestCase):
