@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -10,12 +11,16 @@ from unittest.mock import patch
 
 from ai_job.chat_cli import (
     APP_ROOT,
+    build_summary_messages,
     build_initial_messages,
     default_session_record_path,
     default_trace_log_path,
     main,
+    parse_summary_message,
     resolve_workspace_root,
 )
+from ai_job.compress import CompressionPlan, MessageRange
+from ai_job.communication import AssistantMessage, SummaryMessage, SystemMessage, UserMessage
 from ai_job.infra.env import AppEnv
 
 
@@ -69,6 +74,51 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertIn("system prompt", messages[0].content)
         self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
 
+    def test_build_summary_messages_uses_plan_ranges(self):
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="old"),
+            AssistantMessage(content="old answer"),
+            UserMessage(content="split"),
+            AssistantMessage(content="kept"),
+        ]
+        plan = CompressionPlan(
+            complete_range=MessageRange(1, 3),
+            split_range=MessageRange(3, 4),
+            keep_range=MessageRange(4, 5),
+        )
+
+        summary_messages = build_summary_messages(plan, history)
+
+        self.assertEqual(len(summary_messages), 1)
+        content = summary_messages[0].content
+        self.assertIn("complete_messages", content)
+        self.assertIn("split_messages", content)
+        self.assertIn("old answer", content)
+        self.assertIn("split", content)
+        self.assertNotIn("kept", content)
+
+    def test_parse_summary_message_parses_json_summary(self):
+        assistant_message = AssistantMessage(
+            content=json.dumps(
+                {
+                    "complete_turn_summary": "complete",
+                    "split_turn_summary": None,
+                }
+            )
+        )
+
+        self.assertEqual(
+            parse_summary_message(assistant_message),
+            SummaryMessage(complete_turn_summary="complete"),
+        )
+
+    def test_parse_summary_message_rejects_invalid_content(self):
+        with self.assertRaisesRegex(RuntimeError, "不是合法 JSON"):
+            parse_summary_message(AssistantMessage(content="not json"))
+        with self.assertRaisesRegex(RuntimeError, "缺少 complete_turn_summary"):
+            parse_summary_message(AssistantMessage(content='{"complete_turn_summary": ""}'))
+
     def test_trace_log_path_lives_under_ai_job_project_root(self):
         self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
@@ -95,10 +145,11 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                             with patch(
                                 "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
                             ) as session_cleanup_mock:
-                                with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
-                                    with patch("builtins.input", side_effect=EOFError):
-                                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                                            exit_code = main(["--workspace", tmp_dir])
+                                    with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
+                                        with patch("ai_job.chat_cli.AgentRunner") as agent_runner_mock:
+                                            with patch("builtins.input", side_effect=EOFError):
+                                                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                                    exit_code = main(["--workspace", tmp_dir])
 
         self.assertEqual(exit_code, 0)
         log_configure_mock.assert_called_once()
@@ -118,6 +169,8 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         record_session_mock.assert_called_once()
         self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
         self.assertEqual(record_session_mock.call_args.args[2], "text")
+        self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
+        self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
 
 
 if __name__ == "__main__":

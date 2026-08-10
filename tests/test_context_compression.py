@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from ai_job.agent.context_compression import (
+from ai_job.compress import (
+    CompressionManager,
     CompressionPlan,
     CompressionTrigger,
     MessageRange,
@@ -178,6 +179,92 @@ class ContextCompressionPlanTest(unittest.TestCase):
                 keep_recent_tokens=99,
                 token_counter=one_token,
             )
+
+
+class CompressionManagerTest(unittest.TestCase):
+    def test_compress_if_needed_does_not_call_summarizer_below_threshold(self):
+        calls = []
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="hello"),
+        ]
+        manager = CompressionManager(
+            context_window=10,
+            reserve_tokens=2,
+            keep_recent_tokens=1,
+            token_counter=one_token,
+            summarizer=lambda plan, current_history: calls.append((plan, current_history)),
+        )
+
+        manager.compress_if_needed(history)
+
+        self.assertEqual(calls, [])
+        self.assertEqual(
+            history,
+            [
+                SystemMessage(content="sys"),
+                UserMessage(content="hello"),
+            ],
+        )
+
+    def test_compress_if_needed_rewrites_history_in_place(self):
+        original_history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="old"),
+            AssistantMessage(content="old answer"),
+            UserMessage(content="active"),
+            AssistantMessage(content="active answer"),
+        ]
+        history = list(original_history)
+        summary = SummaryMessage(complete_turn_summary="compressed")
+        received = []
+
+        def summarize(plan, current_history):
+            received.append((plan, list(current_history)))
+            return summary
+
+        manager = CompressionManager(
+            context_window=4,
+            reserve_tokens=1,
+            keep_recent_tokens=2,
+            token_counter=one_token,
+            summarizer=summarize,
+        )
+
+        manager.compress_if_needed(history)
+
+        self.assertIsInstance(history[0], SystemMessage)
+        self.assertEqual(history[1], summary)
+        self.assertEqual(history[2:], original_history[3:])
+        self.assertEqual(received[0][0].complete_range, MessageRange(1, 3))
+        self.assertEqual(received[0][0].keep_range, MessageRange(3, 5))
+        self.assertEqual(received[0][1], original_history)
+
+    def test_compress_if_needed_propagates_summarizer_failure(self):
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="old"),
+            AssistantMessage(content="old answer"),
+            UserMessage(content="active"),
+            AssistantMessage(content="active answer"),
+        ]
+        original_history = list(history)
+
+        def fail(_plan, _history):
+            raise RuntimeError("summary failed")
+
+        manager = CompressionManager(
+            context_window=4,
+            reserve_tokens=1,
+            keep_recent_tokens=2,
+            token_counter=one_token,
+            summarizer=fail,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "summary failed"):
+            manager.compress_if_needed(history)
+
+        self.assertEqual(history, original_history)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from ..compress import CompressionManager
 from ..communication import MessageHistory, SystemMessage, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
@@ -24,12 +25,14 @@ class AgentRunner:
         tool_executor: ToolExecutor,
         max_tool_rounds: int,
         context_start_index: int = 0,
+        compression_manager: CompressionManager | None = None,
     ) -> None:
         self._chat_model = chat_model
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._max_tool_rounds = max_tool_rounds
         self._context_start_index = context_start_index
+        self._compression_manager = compression_manager
 
     def run_turn(self, history: MessageHistory) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
@@ -37,6 +40,8 @@ class AgentRunner:
             round_number = round_index + 1
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
+            if self._compression_manager is not None:
+                self._compression_manager.compress_if_needed(history)
             assistant_message = self._chat_model.complete(self._build_model_history(history), self._tool_registry)
             history.append(assistant_message)
             SessionRecorder.record_session(
