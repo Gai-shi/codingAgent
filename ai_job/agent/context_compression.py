@@ -54,18 +54,18 @@ class CompressionTrigger:
 def check_compression_trigger(
     active_context: MessageHistory,
     context_window: int,
-    reserve_token: int,
+    reserve_tokens: int,
     token_counter: TokenCounter,
 ) -> CompressionTrigger:
     """Check whether the current active context crosses the compression threshold."""
     if context_window <= 0:
         raise ValueError("context_window must be positive")
-    if reserve_token < 0:
-        raise ValueError("reserve_token must be non-negative")
-    if reserve_token >= context_window:
-        raise ValueError("reserve_token must be smaller than context_window")
+    if reserve_tokens < 0:
+        raise ValueError("reserve_tokens must be non-negative")
+    if reserve_tokens >= context_window:
+        raise ValueError("reserve_tokens must be smaller than context_window")
 
-    compression_threshold = context_window - reserve_token
+    compression_threshold = context_window - reserve_tokens
     active_context_tokens = _count_tokens(active_context, token_counter)
     return CompressionTrigger(
         compression_threshold=compression_threshold,
@@ -77,23 +77,23 @@ def check_compression_trigger(
 def build_compression_plan(
     history: MessageHistory,
     context_start_index: int,
-    save_token: int,
+    keep_recent_tokens: int,
     token_counter: TokenCounter,
 ) -> CompressionPlan:
     """Build a compression plan after the caller has already decided to compress."""
     if context_start_index < 0 or context_start_index > len(history):
         raise ValueError("context_start_index is out of range")
-    if save_token <= 0:
-        raise ValueError("save_token must be positive")
+    if keep_recent_tokens <= 0:
+        raise ValueError("keep_recent_tokens must be positive")
 
     compressible_start = _compressible_start(history, context_start_index)
     if compressible_start >= len(history):
         raise ValueError("history has no active messages to compress")
 
-    raw_keep_start = _raw_keep_start(history, compressible_start, save_token, token_counter)
+    raw_keep_start = _raw_keep_start(history, compressible_start, keep_recent_tokens, token_counter)
     keep_start = _safe_keep_start(history, compressible_start, raw_keep_start)
     if keep_start <= compressible_start:
-        raise ValueError("save_token leaves no messages to summarize")
+        raise ValueError("keep_recent_tokens leaves no messages to summarize")
 
     split_start = _split_start(history, compressible_start, keep_start)
     complete_end = split_start if split_start is not None else keep_start
@@ -125,7 +125,7 @@ def _count_tokens(messages: MessageHistory, token_counter: TokenCounter) -> int:
 def _raw_keep_start(
     history: MessageHistory,
     compressible_start: int,
-    save_token: int,
+    keep_recent_tokens: int,
     token_counter: TokenCounter,
 ) -> int:
     token_total = 0
@@ -134,7 +134,7 @@ def _raw_keep_start(
         if token_count < 0:
             raise ValueError("token_counter must not return negative counts")
         token_total += token_count
-        if token_total >= save_token:
+        if token_total >= keep_recent_tokens:
             return index
     return compressible_start
 

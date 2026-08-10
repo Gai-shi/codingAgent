@@ -29,7 +29,7 @@ class ContextCompressionTriggerTest(unittest.TestCase):
             check_compression_trigger(
                 active_context=active_context,
                 context_window=5,
-                reserve_token=2,
+                reserve_tokens=2,
                 token_counter=one_token,
             ),
             CompressionTrigger(
@@ -42,7 +42,7 @@ class ContextCompressionTriggerTest(unittest.TestCase):
             check_compression_trigger(
                 active_context=active_context,
                 context_window=4,
-                reserve_token=2,
+                reserve_tokens=2,
                 token_counter=one_token,
             ),
             CompressionTrigger(
@@ -57,9 +57,9 @@ class ContextCompressionTriggerTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "context_window must be positive"):
             check_compression_trigger(active_context, 0, 0, one_token)
-        with self.assertRaisesRegex(ValueError, "reserve_token must be non-negative"):
+        with self.assertRaisesRegex(ValueError, "reserve_tokens must be non-negative"):
             check_compression_trigger(active_context, 10, -1, one_token)
-        with self.assertRaisesRegex(ValueError, "reserve_token must be smaller"):
+        with self.assertRaisesRegex(ValueError, "reserve_tokens must be smaller"):
             check_compression_trigger(active_context, 10, 10, one_token)
 
     def test_check_trigger_rejects_negative_token_count(self):
@@ -67,7 +67,7 @@ class ContextCompressionTriggerTest(unittest.TestCase):
             check_compression_trigger(
                 active_context=[UserMessage(content="hello")],
                 context_window=10,
-                reserve_token=1,
+                reserve_tokens=1,
                 token_counter=lambda _message: -1,
             )
 
@@ -90,7 +90,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         plan = build_compression_plan(
             history=history,
             context_start_index=0,
-            save_token=2,
+            keep_recent_tokens=2,
             token_counter=one_token,
         )
 
@@ -115,7 +115,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         plan = build_compression_plan(
             history=history,
             context_start_index=0,
-            save_token=1,
+            keep_recent_tokens=1,
             token_counter=one_token,
         )
 
@@ -135,7 +135,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         plan = build_compression_plan(
             history=history,
             context_start_index=0,
-            save_token=2,
+            keep_recent_tokens=2,
             token_counter=one_token,
         )
 
@@ -156,7 +156,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         plan = build_compression_plan(
             history=history,
             context_start_index=1,
-            save_token=2,
+            keep_recent_tokens=2,
             token_counter=one_token,
         )
 
@@ -164,7 +164,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         self.assertIsNone(plan.split_range)
         self.assertEqual(plan.keep_range, MessageRange(4, 6))
 
-    def test_build_plan_rejects_when_save_token_leaves_no_summary_range(self):
+    def test_build_plan_rejects_when_keep_recent_tokens_leave_no_summary_range(self):
         history = [
             SystemMessage(content="sys"),
             UserMessage(content="active"),
@@ -175,7 +175,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
             build_compression_plan(
                 history=history,
                 context_start_index=0,
-                save_token=99,
+                keep_recent_tokens=99,
                 token_counter=one_token,
             )
 

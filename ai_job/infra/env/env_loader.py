@@ -12,6 +12,8 @@ from .env_file_loader import load_env_file
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT_SECONDS = "60"
 DEFAULT_MAX_TOOL_ROUNDS = "8"
+DEFAULT_COMPACTION_RESERVE_TOKENS = "16384"
+DEFAULT_COMPACTION_KEEP_RECENT_TOKENS = "20000"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful coding agent. Use tools when you need workspace information."
 )
@@ -25,6 +27,9 @@ class AppEnv:
     openai_base_url: str
     timeout_seconds: float
     max_tool_rounds: int
+    context_window_override: int | None
+    compaction_reserve_tokens: int
+    compaction_keep_recent_tokens: int
     system_prompt: str
     filter_terminal_log_level: str
 
@@ -59,6 +64,15 @@ class EnvLoader:
             name="AI_JOB_MAX_TOOL_ROUNDS",
             default_value=DEFAULT_MAX_TOOL_ROUNDS,
         )
+        context_window_override = cls._read_optional_positive_int("AI_JOB_CONTEXT_WINDOW")
+        compaction_reserve_tokens = cls._read_positive_int(
+            name="AI_JOB_COMPACTION_RESERVE_TOKENS",
+            default_value=DEFAULT_COMPACTION_RESERVE_TOKENS,
+        )
+        compaction_keep_recent_tokens = cls._read_positive_int(
+            name="AI_JOB_COMPACTION_KEEP_RECENT_TOKENS",
+            default_value=DEFAULT_COMPACTION_KEEP_RECENT_TOKENS,
+        )
 
         return AppEnv(
             openai_api_key=openai_api_key,
@@ -66,6 +80,9 @@ class EnvLoader:
             openai_base_url=os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL).rstrip("/"),
             timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds,
+            context_window_override=context_window_override,
+            compaction_reserve_tokens=compaction_reserve_tokens,
+            compaction_keep_recent_tokens=compaction_keep_recent_tokens,
             system_prompt=os.getenv("AI_JOB_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
             filter_terminal_log_level=os.getenv(
                 "FILTER_TERMINAL_LOG_LEVEL",
@@ -85,6 +102,19 @@ class EnvLoader:
         return parsed_value
 
     @staticmethod
+    def _read_optional_positive_int(name: str) -> int | None:
+        raw_value = os.getenv(name)
+        if raw_value is None or raw_value == "":
+            return None
+        try:
+            parsed_value = int(raw_value)
+        except ValueError as exc:
+            raise ValueError(f"{name} 必须是整数") from exc
+        if parsed_value <= 0:
+            raise ValueError(f"{name} 必须大于 0")
+        return parsed_value
+
+    @staticmethod
     def _read_positive_int(name: str, default_value: str) -> int:
         raw_value = os.getenv(name, default_value)
         try:
@@ -94,4 +124,3 @@ class EnvLoader:
         if parsed_value <= 0:
             raise ValueError(f"{name} 必须大于 0")
         return parsed_value
-

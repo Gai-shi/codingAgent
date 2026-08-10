@@ -58,6 +58,9 @@ def make_app_env():
         openai_base_url="http://example.test/v1",
         timeout_seconds=1.0,
         max_tool_rounds=2,
+        context_window_override=None,
+        compaction_reserve_tokens=16384,
+        compaction_keep_recent_tokens=20000,
         system_prompt="system",
         filter_terminal_log_level="none",
     )

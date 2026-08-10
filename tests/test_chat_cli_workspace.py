@@ -55,6 +55,9 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             openai_base_url="http://localhost:8787/v1",
             timeout_seconds=60.0,
             max_tool_rounds=8,
+            context_window_override=None,
+            compaction_reserve_tokens=16384,
+            compaction_keep_recent_tokens=20000,
             system_prompt="system prompt",
             filter_terminal_log_level="none",
         )
