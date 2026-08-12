@@ -56,9 +56,7 @@ def compress_tool_messages(arguments: dict[str, Any], history: "MessageHistory")
     for tool_call_id, replace_content in replacements:
         tool_messages[tool_call_id].compressions.append(replace_content)
 
-    count = len(replacements)
-    suffix = "" if count == 1 else "s"
-    return f"Compressed {count} tool message{suffix}."
+    return "Success"
 
 
 def _parse_replacements(arguments: dict[str, Any]) -> list[tuple[str, str]]:
