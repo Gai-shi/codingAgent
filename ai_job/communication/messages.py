@@ -48,6 +48,7 @@ class ToolMessage:
 
     tool_call_id: str
     content: str
+    compressions: list[str] = field(default_factory=list)
     visible_to_model: bool = True
 
 
