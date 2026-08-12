@@ -6,7 +6,15 @@ import json
 import math
 from typing import Any
 
-from ..communication import AssistantMessage, Message, SummaryMessage, SystemMessage, ToolMessage, UserMessage
+from ..communication import (
+    AssistantMessage,
+    Message,
+    SummaryMessage,
+    SystemMessage,
+    ToolMessage,
+    UserMessage,
+    tool_message_visible_content,
+)
 
 
 def estimate_text_tokens(text: str) -> int:
@@ -27,7 +35,7 @@ def estimate_message_tokens(message: Message) -> int:
     if isinstance(message, AssistantMessage):
         return estimate_text_tokens(_assistant_text(message))
     if isinstance(message, ToolMessage):
-        return estimate_text_tokens(message.content)
+        return estimate_text_tokens(tool_message_visible_content(message))
 
     raise TypeError(f"unknown message type: {type(message).__name__}")
 

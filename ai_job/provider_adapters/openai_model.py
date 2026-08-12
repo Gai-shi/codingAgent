@@ -13,6 +13,7 @@ from ..communication import (
     SystemMessage,
     ToolMessage,
     UserMessage,
+    tool_message_visible_content,
 )
 from ..infra.env import AppEnv
 from ..infra.http import BaseHttpClient, HttpClientError, UrlLibHttpClient
@@ -90,7 +91,7 @@ class OpenAIModel(BaseChatModel):
             return {
                 "role": "tool",
                 "tool_call_id": message.tool_call_id,
-                "content": message.content,
+                "content": tool_message_visible_content(message),
             }
 
         raise TypeError(f"unknown message type: {type(message).__name__}")

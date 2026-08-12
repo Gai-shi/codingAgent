@@ -56,6 +56,13 @@ Message = Union[SystemMessage, UserMessage, SummaryMessage, AssistantMessage, To
 MessageHistory = list[Message]
 
 
+def tool_message_visible_content(message: ToolMessage) -> str:
+    """Return the ToolMessage content that should enter model context."""
+    if message.compressions:
+        return message.compressions[-1]
+    return message.content
+
+
 def message_to_debug_dict(message: Message) -> dict[str, Any]:
     """Convert one internal message into a JSON-serializable debug dictionary."""
     if isinstance(message, SystemMessage):

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from ..communication import MessageHistory, ToolMessage
 from .base_tool import BaseTool
+
+if TYPE_CHECKING:
+    from ..communication import MessageHistory
 
 
 COMPRESS_TOOL_DESCRIPTION = (
@@ -41,7 +43,7 @@ COMPRESS_TOOL_PARAMETERS_SCHEMA: dict[str, Any] = {
 }
 
 
-def compress_tool_messages(arguments: dict[str, Any], history: MessageHistory) -> str:
+def compress_tool_messages(arguments: dict[str, Any], history: "MessageHistory") -> str:
     replacements = _parse_replacements(arguments)
     tool_messages = _tool_messages_by_id(history)
 
@@ -92,7 +94,9 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[tuple[str, str]]:
     return replacements
 
 
-def _tool_messages_by_id(history: MessageHistory) -> dict[str, ToolMessage]:
+def _tool_messages_by_id(history: "MessageHistory") -> dict[str, Any]:
+    from ..communication import ToolMessage
+
     tool_messages: dict[str, ToolMessage] = {}
     for message in history:
         if not isinstance(message, ToolMessage):
@@ -111,7 +115,7 @@ class CompressTool(BaseTool):
     description = COMPRESS_TOOL_DESCRIPTION
     parameters_schema = COMPRESS_TOOL_PARAMETERS_SCHEMA
 
-    def __init__(self, history: MessageHistory) -> None:
+    def __init__(self, history: "MessageHistory") -> None:
         self._history = history
 
     def _run(self, arguments: dict[str, Any]) -> str:
