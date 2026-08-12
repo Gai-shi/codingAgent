@@ -8,7 +8,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 
 class SessionRecorder:
@@ -48,17 +48,17 @@ class SessionRecorder:
         return cls._session_path
 
     @classmethod
-    def record_text(cls, title: str, content: str) -> None:
+    def record_session(cls, title: str, content: Any, content_format: Literal["text", "json"]) -> None:
         cls._validate_string("title", title)
-        cls._validate_string("content", content)
-        cls._write_section(title=title, content=content, language="text")
-
-    @classmethod
-    def record_json(cls, title: str, payload: Any) -> None:
-        cls._validate_string("title", title)
+        if content_format == "text":
+            cls._validate_string("content", content)
+            cls._write_section(title=title, content=content, language="text")
+            return
+        if content_format != "json":
+            raise ValueError(f"未知会话记录格式：{content_format}")
         cls._write_section(
             title=title,
-            content=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            content=json.dumps(content, ensure_ascii=False, indent=2, default=str),
             language="json",
         )
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .agent import AgentRunner
+from .composition import create_compression_manager
 from .communication import (
     MessageHistory,
     SystemMessage,
@@ -139,15 +140,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     messages = build_initial_messages(app_env, workspace_root)
-    SessionRecorder.record_text("SystemMessage", messages[0].content)
+    SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
     tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
+    compression_manager = create_compression_manager(app_env, chat_model)
     agent_runner = AgentRunner(
         chat_model=chat_model,
         tool_registry=tool_registry,
         tool_executor=tool_executor,
         max_tool_rounds=app_env.max_tool_rounds,
+        compression_manager=compression_manager,
     )
     print_banner(app_env, tool_registry, workspace_root)
 
@@ -174,7 +177,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         turn_start = len(messages)
         messages.append(UserMessage(content=user_text))
-        SessionRecorder.record_text("UserMessage", user_text)
+        SessionRecorder.record_session("UserMessage", user_text, "text")
         try:
             with SuppressInputEchoAndDiscard():
                 assistant_text = agent_runner.run_turn(messages)

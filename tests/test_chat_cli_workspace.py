@@ -55,6 +55,9 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             openai_base_url="http://localhost:8787/v1",
             timeout_seconds=60.0,
             max_tool_rounds=8,
+            context_window_override=None,
+            compaction_reserve_tokens=16384,
+            compaction_keep_recent_tokens=20000,
             system_prompt="system prompt",
             filter_terminal_log_level="none",
         )
@@ -92,10 +95,11 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                             with patch(
                                 "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
                             ) as session_cleanup_mock:
-                                with patch("ai_job.chat_cli.SessionRecorder.record_text") as record_text_mock:
-                                    with patch("builtins.input", side_effect=EOFError):
-                                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                                            exit_code = main(["--workspace", tmp_dir])
+                                with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
+                                    with patch("ai_job.chat_cli.AgentRunner") as agent_runner_mock:
+                                        with patch("builtins.input", side_effect=EOFError):
+                                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                                exit_code = main(["--workspace", tmp_dir])
 
         self.assertEqual(exit_code, 0)
         log_configure_mock.assert_called_once()
@@ -112,8 +116,11 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             str(Path(tmp_dir).resolve()),
         )
         session_cleanup_mock.assert_called_once_with()
-        record_text_mock.assert_called_once()
-        self.assertEqual(record_text_mock.call_args.args[0], "SystemMessage")
+        record_session_mock.assert_called_once()
+        self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
+        self.assertEqual(record_session_mock.call_args.args[2], "text")
+        self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
+        self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
 
 
 if __name__ == "__main__":

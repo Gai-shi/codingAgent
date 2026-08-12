@@ -21,8 +21,8 @@ class SessionRecorderTest(unittest.TestCase):
                     session_started_at=started_at,
                     metadata={"workspace": "/tmp/workspace", "model": "model"},
                 )
-                SessionRecorder.record_text("UserMessage", "你好\n读取 README")
-                SessionRecorder.record_json("ToolCall read_file", {"path": "README.md"})
+                SessionRecorder.record_session("UserMessage", "你好\n读取 README", "text")
+                SessionRecorder.record_session("ToolCall read_file", {"path": "README.md"}, "json")
 
             session_path = Path(tmp_dir) / "sessions" / "sessions-20260805-103812-123.md"
             self.assertEqual(SessionRecorder.session_path(), session_path)

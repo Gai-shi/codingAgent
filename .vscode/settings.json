@@ -1,4 +1,5 @@
 {
     "pitaya.region": "cn",
-    "pitaya.web_id": "7670020777651226164"
+    "pitaya.web_id": "7670020777651226164",
+    "python.languageServer": "None"
 }

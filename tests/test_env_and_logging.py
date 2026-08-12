@@ -68,6 +68,9 @@ class EnvLoaderTest(unittest.TestCase):
                 "OPENAI_BASE_URL": "http://localhost:8787/v1/",
                 "AI_JOB_TIMEOUT_SECONDS": "2.5",
                 "AI_JOB_MAX_TOOL_ROUNDS": "3",
+                "AI_JOB_CONTEXT_WINDOW": "100000",
+                "AI_JOB_COMPACTION_RESERVE_TOKENS": "1000",
+                "AI_JOB_COMPACTION_KEEP_RECENT_TOKENS": "2000",
                 "AI_JOB_SYSTEM_PROMPT": "system",
                 "FILTER_TERMINAL_LOG_LEVEL": "warn",
             },
@@ -80,6 +83,9 @@ class EnvLoaderTest(unittest.TestCase):
         self.assertEqual(app_env.openai_base_url, "http://localhost:8787/v1")
         self.assertEqual(app_env.timeout_seconds, 2.5)
         self.assertEqual(app_env.max_tool_rounds, 3)
+        self.assertEqual(app_env.context_window_override, 100000)
+        self.assertEqual(app_env.compaction_reserve_tokens, 1000)
+        self.assertEqual(app_env.compaction_keep_recent_tokens, 2000)
         self.assertEqual(app_env.system_prompt, "system")
         self.assertEqual(app_env.filter_terminal_log_level, "warn")
 
@@ -108,6 +114,9 @@ class EnvLoaderTest(unittest.TestCase):
         self.assertEqual(app_env.openai_base_url, "https://api.openai.com/v1")
         self.assertEqual(app_env.timeout_seconds, 60.0)
         self.assertEqual(app_env.max_tool_rounds, 8)
+        self.assertEqual(app_env.context_window_override, None)
+        self.assertEqual(app_env.compaction_reserve_tokens, 16384)
+        self.assertEqual(app_env.compaction_keep_recent_tokens, 20000)
         self.assertEqual(
             app_env.system_prompt,
             "You are a helpful coding agent. Use tools when you need workspace information.",
@@ -129,6 +138,22 @@ class EnvLoaderTest(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "AI_JOB_MAX_TOOL_ROUNDS 必须是整数"):
+                EnvLoader.load_from_current_environment()
+
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "key", "OPENAI_MODEL": "model", "AI_JOB_CONTEXT_WINDOW": "large"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_CONTEXT_WINDOW 必须是整数"):
+                EnvLoader.load_from_current_environment()
+
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "key", "OPENAI_MODEL": "model", "AI_JOB_CONTEXT_WINDOW": "0"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_CONTEXT_WINDOW 必须大于 0"):
                 EnvLoader.load_from_current_environment()
 
 
