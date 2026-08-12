@@ -8,7 +8,7 @@ from typing import Any, Union
 from ..tools.tool_call import ToolCall
 
 
-@dataclass(frozen=True)
+@dataclass
 class SystemMessage:
     """Instruction message that establishes the agent's behavior."""
 
@@ -16,7 +16,7 @@ class SystemMessage:
     visible_to_model: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass
 class UserMessage:
     """Message created from one user input that should enter model context."""
 
@@ -24,7 +24,7 @@ class UserMessage:
     visible_to_model: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass
 class SummaryMessage:
     """Compressed conversation context produced by the agent."""
 
@@ -33,7 +33,7 @@ class SummaryMessage:
     visible_to_model: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass
 class AssistantMessage:
     """Provider-normalized assistant message returned by a chat model."""
 
@@ -42,7 +42,7 @@ class AssistantMessage:
     visible_to_model: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolMessage:
     """Tool execution text that should be sent back to the model."""
 

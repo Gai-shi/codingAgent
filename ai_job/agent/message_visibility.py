@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from ..communication import AssistantMessage, Message, MessageHistory, ToolMessage
 
 
@@ -91,7 +89,7 @@ class MessageVisibilityManager:
         index: int,
         visible_to_model: bool,
     ) -> None:
-        history[index] = replace(_get_message(history, index), visible_to_model=visible_to_model)
+        _get_message(history, index).visible_to_model = visible_to_model
 
 
 def _get_message(history: MessageHistory, index: int) -> Message:
