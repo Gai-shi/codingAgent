@@ -13,6 +13,7 @@ class SystemMessage:
     """Instruction message that establishes the agent's behavior."""
 
     content: str
+    visible_to_model: bool = True
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class UserMessage:
     """Message created from one user input that should enter model context."""
 
     content: str
+    visible_to_model: bool = True
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class SummaryMessage:
 
     complete_turn_summary: str
     split_turn_summary: str | None = None
+    visible_to_model: bool = True
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class AssistantMessage:
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    visible_to_model: bool = True
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class ToolMessage:
 
     tool_call_id: str
     content: str
+    visible_to_model: bool = True
 
 
 Message = Union[SystemMessage, UserMessage, SummaryMessage, AssistantMessage, ToolMessage]
