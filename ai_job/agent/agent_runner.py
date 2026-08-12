@@ -87,8 +87,12 @@ class AgentRunner:
 
         active_messages = history[self._context_start_index :]
         if self._context_start_index > 0 and isinstance(history[0], SystemMessage):
-            return [history[0], *active_messages]
-        return active_messages
+            return self._visible_messages([history[0], *active_messages])
+        return self._visible_messages(active_messages)
+
+    @staticmethod
+    def _visible_messages(messages: MessageHistory) -> MessageHistory:
+        return [message for message in messages if message.visible_to_model]
 
     @staticmethod
     def _tool_call_log_line(
