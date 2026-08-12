@@ -10,6 +10,7 @@ from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
 from ..tools import ToolCall, ToolExecutor, ToolRegistry
+from .message_visibility import MessageVisibilityManager
 
 
 TRACE_TAG = "trace"
@@ -26,6 +27,7 @@ class AgentRunner:
         max_tool_rounds: int,
         context_start_index: int = 0,
         compression_manager: CompressionManager | None = None,
+        message_visibility_manager: MessageVisibilityManager | None = None,
     ) -> None:
         self._chat_model = chat_model
         self._tool_registry = tool_registry
@@ -33,6 +35,7 @@ class AgentRunner:
         self._max_tool_rounds = max_tool_rounds
         self._context_start_index = context_start_index
         self._compression_manager = compression_manager
+        self._message_visibility_manager = message_visibility_manager or MessageVisibilityManager()
 
     def run_turn(self, history: MessageHistory) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
@@ -58,6 +61,7 @@ class AgentRunner:
                     raise RuntimeError("LLM 最终响应缺少文本 content")
                 return assistant_message.content
 
+            assistant_message_index = len(history) - 1
             tool_call_count = len(assistant_message.tool_calls)
             for tool_call_index, tool_call in enumerate(assistant_message.tool_calls, start=1):
                 LogWrapper.debug(
@@ -71,11 +75,19 @@ class AgentRunner:
                 )
                 SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), "json")
                 tool_content = self._tool_executor.execute(tool_call)
+                tool_message_index = len(history)
                 history.append(
                     ToolMessage(
                         tool_call_id=tool_call.id,
                         content=tool_content,
                     )
+                )
+                self._message_visibility_manager.apply_after_tool_execution(
+                    history,
+                    assistant_message_index=assistant_message_index,
+                    tool_message_index=tool_message_index,
+                    tool_name=tool_call.name,
+                    success=tool_content == "Success",
                 )
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
 
