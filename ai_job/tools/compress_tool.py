@@ -8,7 +8,13 @@ from .base_tool import BaseTool, ToolExecutionContext
 
 
 COMPRESS_TOOL_DESCRIPTION = (
-    "Compress previous tool outputs for future model context. "
+    "Replace previous tool outputs in future model context when they contain lots of irrelevant "
+    "content and only a small part is useful for the remaining task. "
+    "Use this to keep the facts, file paths, line numbers, error messages, and reasoning evidence "
+    "that matter while removing irrelevant bulk. "
+    "Do not use this when the output still needs line-by-line analysis, when it is a stack trace, "
+    "diff, patch, or test failure detail that may need exact quoting, or when you are unsure which "
+    "details will matter later. "
     "Pass replacements as objects containing tool_call_id and replace_content. "
     "If any tool_call_id is invalid, no compression is applied."
 )
