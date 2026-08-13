@@ -10,9 +10,7 @@ from .messages import (
     ToolMessage,
     UserMessage,
     message_history_to_debug_dicts,
-    message_history_to_model_visible_debug_dicts,
     message_to_debug_dict,
-    message_to_model_visible_debug_dict,
     tool_message_visible_content,
 )
 
@@ -26,8 +24,6 @@ __all__ = [
     "ToolMessage",
     "UserMessage",
     "message_history_to_debug_dicts",
-    "message_history_to_model_visible_debug_dicts",
     "message_to_debug_dict",
-    "message_to_model_visible_debug_dict",
     "tool_message_visible_content",
 ]

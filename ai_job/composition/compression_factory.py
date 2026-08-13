@@ -12,7 +12,7 @@ from ..communication import (
     MessageState,
     SummaryMessage,
     UserMessage,
-    message_history_to_model_visible_debug_dicts,
+    message_history_to_debug_dicts,
 )
 from ..compress import CompressionManager, CompressionPlan
 from ..infra.env import AppEnv
@@ -58,22 +58,24 @@ def build_summary_messages(plan: CompressionPlan, message_state: MessageState) -
             "不要编造未出现的信息。",
             "complete_messages:",
             json.dumps(
-                message_history_to_model_visible_debug_dicts(
+                message_history_to_debug_dicts(
                     message_state.visible_history_range(
                         plan.complete_range.start,
                         plan.complete_range.end,
-                    )
+                    ),
+                    use_model_visible_content=True,
                 ),
                 ensure_ascii=False,
                 indent=2,
             ),
             "split_messages:",
             json.dumps(
-                message_history_to_model_visible_debug_dicts(
+                message_history_to_debug_dicts(
                     message_state.visible_history_range(
                         plan.split_range.start,
                         plan.split_range.end,
-                    )
+                    ),
+                    use_model_visible_content=True,
                 )
                 if plan.split_range is not None
                 else [],

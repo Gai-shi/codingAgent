@@ -97,17 +97,12 @@ def tool_message_visible_content(message: ToolMessage) -> str:
     return message.content
 
 
-def message_to_debug_dict(message: Message) -> dict[str, Any]:
+def message_to_debug_dict(
+    message: Message,
+    *,
+    use_model_visible_content: bool = False,
+) -> dict[str, Any]:
     """Convert one internal message into a JSON-serializable debug dictionary."""
-    return _message_to_dict(message, use_model_visible_content=False)
-
-
-def message_to_model_visible_debug_dict(message: Message) -> dict[str, Any]:
-    """Convert one model-visible message using the exact content the model should see."""
-    return _message_to_dict(message, use_model_visible_content=True)
-
-
-def _message_to_dict(message: Message, *, use_model_visible_content: bool) -> dict[str, Any]:
     if isinstance(message, SystemMessage):
         return {"role": "system", "content": message.content}
     if isinstance(message, UserMessage):
@@ -136,11 +131,16 @@ def _message_to_dict(message: Message, *, use_model_visible_content: bool) -> di
     raise TypeError(f"unknown message type: {type(message).__name__}")
 
 
-def message_history_to_debug_dicts(history: MessageHistory) -> list[dict[str, Any]]:
+def message_history_to_debug_dicts(
+    history: MessageHistory,
+    *,
+    use_model_visible_content: bool = False,
+) -> list[dict[str, Any]]:
     """Convert internal message history into JSON-serializable debug dictionaries."""
-    return [message_to_debug_dict(message) for message in history]
-
-
-def message_history_to_model_visible_debug_dicts(history: MessageHistory) -> list[dict[str, Any]]:
-    """Convert model-visible messages into JSON-serializable dictionaries for model prompts."""
-    return [message_to_model_visible_debug_dict(message) for message in history]
+    return [
+        message_to_debug_dict(
+            message,
+            use_model_visible_content=use_model_visible_content,
+        )
+        for message in history
+    ]
