@@ -178,6 +178,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
 
         turn_start = len(message_state.history)
+        turn_context_start_index = message_state.context_start_index
         message_state.history.append(UserMessage(content=user_text))
         SessionRecorder.record_session("UserMessage", user_text, "text")
         try:
@@ -185,10 +186,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 assistant_text = agent_runner.run_turn(message_state)
         except KeyboardInterrupt:
             del message_state.history[turn_start:]
+            message_state.context_start_index = turn_context_start_index
             print("\n已中断。")
             return 130
         except RuntimeError as exc:
             del message_state.history[turn_start:]
+            message_state.context_start_index = turn_context_start_index
             print(f"错误：{exc}", file=sys.stderr)
             continue
 

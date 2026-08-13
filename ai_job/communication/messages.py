@@ -63,6 +63,32 @@ class MessageState:
     history: MessageHistory
     context_start_index: int = 0
 
+    def model_visible_history(self) -> MessageHistory:
+        """Return the single source of truth for messages sent to the model."""
+        self._validate_context_start_index()
+        if not self.history:
+            return []
+
+        if self.context_start_index == 0:
+            candidate_messages = self.history
+        else:
+            candidate_messages = [self.history[0], *self.history[self.context_start_index :]]
+        return self._visible_messages(candidate_messages)
+
+    def visible_history_range(self, start: int, end: int) -> MessageHistory:
+        """Return visible messages inside one original-history half-open range."""
+        if start < 0 or end < start or end > len(self.history):
+            raise ValueError("message range is out of range")
+        return self._visible_messages(self.history[start:end])
+
+    def _validate_context_start_index(self) -> None:
+        if self.context_start_index < 0 or self.context_start_index > len(self.history):
+            raise ValueError("context_start_index is out of range")
+
+    @staticmethod
+    def _visible_messages(messages: MessageHistory) -> MessageHistory:
+        return [message for message in messages if message.visible_to_model]
+
 
 def tool_message_visible_content(message: ToolMessage) -> str:
     """Return the ToolMessage content that should enter model context."""

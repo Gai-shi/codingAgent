@@ -9,6 +9,7 @@ from ..agent.token_counting import estimate_message_tokens
 from ..communication import (
     AssistantMessage,
     MessageHistory,
+    MessageState,
     SummaryMessage,
     UserMessage,
     message_history_to_debug_dicts,
@@ -33,12 +34,12 @@ def create_compression_manager(app_env: AppEnv, chat_model: BaseChatModel) -> Co
     )
 
 
-def create_summarizer(chat_model: BaseChatModel) -> Callable[[CompressionPlan, MessageHistory], SummaryMessage]:
+def create_summarizer(chat_model: BaseChatModel) -> Callable[[CompressionPlan, MessageState], SummaryMessage]:
     empty_tool_registry = ToolRegistry([])
 
-    def summarize(plan: CompressionPlan, history: MessageHistory) -> SummaryMessage:
+    def summarize(plan: CompressionPlan, message_state: MessageState) -> SummaryMessage:
         assistant_message = chat_model.complete(
-            build_summary_messages(plan, history),
+            build_summary_messages(plan, message_state),
             empty_tool_registry,
         )
         return parse_summary_message(assistant_message)
@@ -46,7 +47,7 @@ def create_summarizer(chat_model: BaseChatModel) -> Callable[[CompressionPlan, M
     return summarize
 
 
-def build_summary_messages(plan: CompressionPlan, history: MessageHistory) -> MessageHistory:
+def build_summary_messages(plan: CompressionPlan, message_state: MessageState) -> MessageHistory:
     content = "\n\n".join(
         [
             "请压缩以下对话上下文，输出 JSON，不要输出其它文本。",
@@ -57,13 +58,23 @@ def build_summary_messages(plan: CompressionPlan, history: MessageHistory) -> Me
             "不要编造未出现的信息。",
             "complete_messages:",
             json.dumps(
-                message_history_to_debug_dicts(history[plan.complete_range.start : plan.complete_range.end]),
+                message_history_to_debug_dicts(
+                    message_state.visible_history_range(
+                        plan.complete_range.start,
+                        plan.complete_range.end,
+                    )
+                ),
                 ensure_ascii=False,
                 indent=2,
             ),
             "split_messages:",
             json.dumps(
-                message_history_to_debug_dicts(history[plan.split_range.start : plan.split_range.end])
+                message_history_to_debug_dicts(
+                    message_state.visible_history_range(
+                        plan.split_range.start,
+                        plan.split_range.end,
+                    )
+                )
                 if plan.split_range is not None
                 else [],
                 ensure_ascii=False,

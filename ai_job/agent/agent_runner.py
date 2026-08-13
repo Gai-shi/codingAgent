@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from ..compress import CompressionManager
-from ..communication import MessageHistory, MessageState, SystemMessage, ToolMessage
+from ..communication import MessageState, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
@@ -45,7 +45,7 @@ class AgentRunner:
             if self._compression_manager is not None:
                 self._compression_manager.compress_if_needed(message_state)
             assistant_message = self._chat_model.complete(
-                self._build_model_history(message_state),
+                message_state.model_visible_history(),
                 self._tool_registry,
             )
             history.append(assistant_message)
@@ -97,21 +97,6 @@ class AgentRunner:
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
-
-    def _build_model_history(self, message_state: MessageState) -> MessageHistory:
-        history = message_state.history
-        if not history:
-            return []
-
-        active_messages = history[message_state.context_start_index :]
-        if message_state.context_start_index > 0 and isinstance(history[0], SystemMessage):
-            return self._visible_messages([history[0], *active_messages])
-        return self._visible_messages(active_messages)
-
-    @staticmethod
-    def _visible_messages(messages: MessageHistory) -> MessageHistory:
-        return [message for message in messages if message.visible_to_model]
-
     @staticmethod
     def _tool_call_log_line(
         round_number: int,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..communication import MessageHistory, MessageState, SummaryMessage, SystemMessage
+from ..communication import MessageState, SummaryMessage
 from .context_compression import (
     CompressionPlan,
     TokenCounter,
@@ -13,7 +13,7 @@ from .context_compression import (
 )
 
 
-Summarizer = Callable[[CompressionPlan, MessageHistory], SummaryMessage]
+Summarizer = Callable[[CompressionPlan, MessageState], SummaryMessage]
 
 
 class CompressionManager:
@@ -36,9 +36,8 @@ class CompressionManager:
     def compress_if_needed(self, message_state: MessageState) -> None:
         """Mutate history in-place when the active context exceeds the compression threshold."""
         history = message_state.history
-        active_context = self._active_context(message_state)
         trigger = check_compression_trigger(
-            active_context=active_context,
+            active_context=message_state.model_visible_history(),
             context_window=self._context_window,
             reserve_tokens=self._reserve_tokens,
             token_counter=self._token_counter,
@@ -52,18 +51,8 @@ class CompressionManager:
             keep_recent_tokens=self._keep_recent_tokens,
             token_counter=self._token_counter,
         )
-        summary = self._summarizer(plan, history)
+        summary = self._summarizer(plan, message_state)
         self._compressed_history(message_state, plan, summary)
-
-    def _active_context(self, message_state: MessageState) -> MessageHistory:
-        history = message_state.history
-        if not history:
-            return []
-
-        active_messages = history[message_state.context_start_index :]
-        if message_state.context_start_index > 0 and _has_system_message(history):
-            return [history[0], *active_messages]
-        return active_messages
 
     @staticmethod
     def _compressed_history(
@@ -81,7 +70,3 @@ class CompressionManager:
             ]
         )
         message_state.context_start_index = summary_index
-
-
-def _has_system_message(history: MessageHistory) -> bool:
-    return bool(history) and isinstance(history[0], SystemMessage)

@@ -226,8 +226,8 @@ class CompressionManagerTest(unittest.TestCase):
         summary = SummaryMessage(complete_turn_summary="compressed")
         received = []
 
-        def summarize(plan, current_history):
-            received.append((plan, list(current_history)))
+        def summarize(plan, current_message_state):
+            received.append((plan, list(current_message_state.history)))
             return summary
 
         manager = CompressionManager(
@@ -249,6 +249,33 @@ class CompressionManagerTest(unittest.TestCase):
         self.assertEqual(received[0][0].complete_range, MessageRange(1, 3))
         self.assertEqual(received[0][0].keep_range, MessageRange(3, 5))
         self.assertEqual(received[0][1], original_history)
+
+    def test_compress_if_needed_ignores_hidden_messages_when_checking_threshold(self):
+        calls = []
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="visible"),
+            AssistantMessage(content="hidden", visible_to_model=False),
+        ]
+        manager = CompressionManager(
+            context_window=3,
+            reserve_tokens=1,
+            keep_recent_tokens=1,
+            token_counter=one_token,
+            summarizer=lambda plan, message_state: calls.append((plan, message_state)),
+        )
+
+        manager.compress_if_needed(MessageState(history=history))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(
+            history,
+            [
+                SystemMessage(content="sys"),
+                UserMessage(content="visible"),
+                AssistantMessage(content="hidden", visible_to_model=False),
+            ],
+        )
 
     def test_compress_if_needed_propagates_summarizer_failure(self):
         history = [
