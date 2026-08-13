@@ -16,7 +16,7 @@ from ai_job.communication import (
 from ai_job.infra.logging import LogWrapper
 from ai_job.infra.session_recording import SessionRecorder
 from ai_job.provider_adapters import BaseChatModel
-from ai_job.tools import BaseTool, ToolCall, ToolExecutor, ToolRegistry
+from ai_job.tools import BaseTool, CompressTool, ToolCall, ToolExecutor, ToolRegistry
 
 
 class EchoTool(BaseTool):
@@ -198,6 +198,100 @@ class AgentRunnerTest(unittest.TestCase):
             [SystemMessage(content="sys"), UserMessage(content="please echo")],
         )
         self.assertIsInstance(compression_manager.seen_histories[1][-1], ToolMessage)
+
+    def test_run_turn_rejects_mixed_compress_tool_batch_before_mutating_history(self):
+        registry = ToolRegistry([CompressTool(), EchoTool()])
+        model = ScriptedChatModel(
+            [
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="compress-1",
+                            name="compress_tool",
+                            arguments={
+                                "replacements": [
+                                    {"tool_call_id": "call-old", "replace_content": "short"}
+                                ]
+                            },
+                        ),
+                        ToolCall(id="call-echo", name="echo", arguments={"text": "hello"}),
+                    ],
+                )
+            ]
+        )
+        runner = AgentRunner(
+            chat_model=model,
+            tool_registry=registry,
+            tool_executor=ToolExecutor(registry),
+            max_tool_rounds=1,
+        )
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="please work"),
+            ToolMessage(tool_call_id="call-old", content="large result"),
+        ]
+        original_history = list(history)
+
+        with self.assertRaisesRegex(RuntimeError, "compress_tool cannot be mixed"):
+            runner.run_turn(MessageState(history=history, context_start_index=1))
+
+        self.assertEqual(history, original_history)
+
+    def test_run_turn_allows_multiple_compress_tool_calls_and_hides_batch(self):
+        registry = ToolRegistry([CompressTool()])
+        model = ScriptedChatModel(
+            [
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="compress-1",
+                            name="compress_tool",
+                            arguments={
+                                "replacements": [
+                                    {"tool_call_id": "call-old-1", "replace_content": "short 1"}
+                                ]
+                            },
+                        ),
+                        ToolCall(
+                            id="compress-2",
+                            name="compress_tool",
+                            arguments={
+                                "replacements": [
+                                    {"tool_call_id": "call-old-2", "replace_content": "short 2"}
+                                ]
+                            },
+                        ),
+                    ],
+                ),
+                AssistantMessage(content="done"),
+            ]
+        )
+        runner = AgentRunner(
+            chat_model=model,
+            tool_registry=registry,
+            tool_executor=ToolExecutor(registry),
+            max_tool_rounds=2,
+        )
+        history = [
+            SystemMessage(content="sys"),
+            UserMessage(content="please compress"),
+            ToolMessage(tool_call_id="call-old-1", content="large 1"),
+            ToolMessage(tool_call_id="call-old-2", content="large 2"),
+        ]
+
+        result = runner.run_turn(MessageState(history=history, context_start_index=1))
+
+        self.assertEqual(result, "done")
+        self.assertEqual(history[2].compressions, ["short 1"])
+        self.assertEqual(history[3].compressions, ["short 2"])
+        self.assertFalse(history[4].visible_to_model)
+        self.assertFalse(history[5].visible_to_model)
+        self.assertFalse(history[6].visible_to_model)
+        self.assertNotIn(history[4], model.seen_histories[1])
+        self.assertNotIn(history[5], model.seen_histories[1])
+        self.assertNotIn(history[6], model.seen_histories[1])
 
     def test_run_turn_uses_compressed_history_for_model_request(self):
         registry = ToolRegistry([])

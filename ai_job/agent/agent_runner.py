@@ -10,7 +10,7 @@ from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
 from ..tools import ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
-from .message_visibility import MessageVisibilityManager
+from .message_visibility import COMPRESS_TOOL_NAME, MessageVisibilityManager
 
 
 TRACE_TAG = "trace"
@@ -48,6 +48,7 @@ class AgentRunner:
                 message_state.model_visible_history(),
                 self._tool_registry,
             )
+            self._validate_tool_call_batch(assistant_message)
             history.append(assistant_message)
             SessionRecorder.record_session(
                 "AssistantMessage",
@@ -65,6 +66,7 @@ class AgentRunner:
 
             assistant_message_index = len(history) - 1
             tool_call_count = len(assistant_message.tool_calls)
+            tool_message_indexes: list[int] = []
             for tool_call_index, tool_call in enumerate(assistant_message.tool_calls, start=1):
                 LogWrapper.debug(
                     TRACE_TAG,
@@ -87,16 +89,22 @@ class AgentRunner:
                         content=tool_content,
                     )
                 )
-                self._message_visibility_manager.apply_after_tool_execution(
-                    history,
-                    assistant_message_index=assistant_message_index,
-                    tool_message_index=tool_message_index,
-                    tool_name=tool_call.name,
-                    success=tool_content == "Success",
-                )
+                tool_message_indexes.append(tool_message_index)
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
+            self._message_visibility_manager.apply_after_tool_batch(
+                history,
+                assistant_message_index=assistant_message_index,
+                tool_message_indexes=tool_message_indexes,
+            )
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
+
+    @staticmethod
+    def _validate_tool_call_batch(assistant_message: "AssistantMessage") -> None:
+        tool_names = {tool_call.name for tool_call in assistant_message.tool_calls}
+        if COMPRESS_TOOL_NAME in tool_names and tool_names != {COMPRESS_TOOL_NAME}:
+            raise RuntimeError("compress_tool cannot be mixed with other tool calls")
+
     @staticmethod
     def _tool_call_log_line(
         round_number: int,

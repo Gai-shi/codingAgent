@@ -11,6 +11,7 @@ from ai_job.communication import (
     ToolMessage,
     UserMessage,
     message_history_to_debug_dicts,
+    message_history_to_model_visible_debug_dicts,
 )
 from ai_job.infra.env import AppEnv
 from ai_job.infra.http import BaseHttpClient, HttpClientError
@@ -139,6 +140,24 @@ class MessageDebugTest(unittest.TestCase):
         self.assertEqual(
             result[4],
             {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+        )
+
+    def test_model_visible_debug_dicts_use_compressed_tool_content(self):
+        history = [
+            ToolMessage(
+                tool_call_id="call-1",
+                content="raw result",
+                compressions=["compressed result"],
+            )
+        ]
+
+        self.assertEqual(
+            message_history_to_model_visible_debug_dicts(history),
+            [{"role": "tool", "tool_call_id": "call-1", "content": "compressed result"}],
+        )
+        self.assertEqual(
+            message_history_to_debug_dicts(history),
+            [{"role": "tool", "tool_call_id": "call-1", "content": "raw result"}],
         )
 
 

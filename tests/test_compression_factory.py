@@ -10,6 +10,7 @@ from ai_job.communication import (
     MessageState,
     SummaryMessage,
     SystemMessage,
+    ToolMessage,
     UserMessage,
 )
 
@@ -60,6 +61,28 @@ class CompressionFactoryTest(unittest.TestCase):
         self.assertIn("visible split", content)
         self.assertNotIn("hidden compress call", content)
         self.assertNotIn("kept", content)
+
+    def test_build_summary_messages_uses_tool_model_visible_content(self):
+        history = [
+            SystemMessage(content="sys"),
+            ToolMessage(
+                tool_call_id="call-1",
+                content="raw tool output",
+                compressions=["compressed tool output"],
+            ),
+            UserMessage(content="active"),
+        ]
+        plan = CompressionPlan(
+            complete_range=MessageRange(1, 2),
+            split_range=None,
+            keep_range=MessageRange(2, 3),
+        )
+
+        summary_messages = build_summary_messages(plan, MessageState(history=history))
+
+        content = summary_messages[0].content
+        self.assertIn("compressed tool output", content)
+        self.assertNotIn("raw tool output", content)
 
     def test_parse_summary_message_parses_json_summary(self):
         assistant_message = AssistantMessage(
