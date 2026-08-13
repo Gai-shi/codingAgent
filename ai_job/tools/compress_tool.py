@@ -4,21 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .base_tool import BaseTool, ToolExecutionContext
-
-if TYPE_CHECKING:
-    from ..communication import MessageHistory, ToolMessage
-
-
-@dataclass(frozen=True)
-class ToolCallSignature:
-    tool_name: str
-    arguments_json: str
-
-
-ToolMessageTargetsBySignature = dict[ToolCallSignature, list["ToolMessage"]]
 
 
 COMPRESS_TOOL_DESCRIPTION = (
@@ -71,11 +59,8 @@ class Replacement:
     tool_arguments: dict[str, Any]
     replace_content: str
 
-    def signature(self) -> ToolCallSignature:
-        return ToolCallSignature(
-            tool_name=self.tool_name,
-            arguments_json=_canonical_json(self.tool_arguments),
-        )
+    def call_signature(self) -> tuple[str, str]:
+        return (self.tool_name, _canonical_json(self.tool_arguments))
 
 
 def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
@@ -85,7 +70,7 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
     )
 
     for replacement in replacements:
-        matching_targets = targets_by_key.get(replacement.signature(), [])
+        matching_targets = targets_by_key.get(replacement.call_signature(), [])
         if not matching_targets:
             raise ValueError(
                 f"no previous tool result matches {replacement.tool_name} "
@@ -93,7 +78,7 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
             )
 
     for replacement in replacements:
-        matching_targets = targets_by_key[replacement.signature()]
+        matching_targets = targets_by_key[replacement.call_signature()]
         uncompressed_targets = [
             tool_message for tool_message in matching_targets if not tool_message.compressions
         ]
@@ -113,7 +98,7 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
         raise ValueError('invalid arguments: "replacements" must be a non-empty list')
 
     replacements: list[Replacement] = []
-    seen_signatures: set[ToolCallSignature] = set()
+    seen_call_signatures: set[tuple[str, str]] = set()
     for index, raw_replacement in enumerate(raw_replacements):
         if not isinstance(raw_replacement, dict):
             raise ValueError(f'invalid arguments: "replacements[{index}]" must be an object')
@@ -144,13 +129,13 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
             tool_arguments=tool_arguments,
             replace_content=replace_content,
         )
-        signature = replacement.signature()
-        if signature in seen_signatures:
+        call_signature = replacement.call_signature()
+        if call_signature in seen_call_signatures:
             raise ValueError(
                 f"duplicate tool_name/tool_arguments in replacements: "
                 f"{tool_name} {_canonical_json(tool_arguments)}"
             )
-        seen_signatures.add(signature)
+        seen_call_signatures.add(call_signature)
         replacements.append(replacement)
 
     return replacements
@@ -158,11 +143,11 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
 
 def _tool_message_targets_by_call_arguments(
     history: "MessageHistory",
-) -> ToolMessageTargetsBySignature:
+) -> dict[tuple[str, str], list["ToolMessage"]]:
     from ..communication import AssistantMessage, ToolMessage
 
     tool_calls_by_id: dict[str, tuple[str, dict[str, Any]]] = {}
-    targets_by_key: ToolMessageTargetsBySignature = {}
+    targets_by_call_signature: dict[tuple[str, str], list[ToolMessage]] = {}
     for message in history:
         if isinstance(message, AssistantMessage):
             for tool_call in message.tool_calls:
@@ -180,13 +165,10 @@ def _tool_message_targets_by_call_arguments(
                 f'missing assistant tool_call for ToolMessage.tool_call_id: "{message.tool_call_id}"'
             )
         tool_name, tool_arguments = tool_call
-        signature = ToolCallSignature(
-            tool_name=tool_name,
-            arguments_json=_canonical_json(tool_arguments),
-        )
-        targets_by_key.setdefault(signature, []).append(message)
+        call_signature = (tool_name, _canonical_json(tool_arguments))
+        targets_by_call_signature.setdefault(call_signature, []).append(message)
 
-    return targets_by_key
+    return targets_by_call_signature
 
 
 def _canonical_json(value: Any) -> str:
