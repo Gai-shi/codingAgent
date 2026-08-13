@@ -10,7 +10,6 @@ from ..communication import (
     Message,
     MessageHistory,
     SummaryMessage,
-    SystemMessage,
     ToolMessage,
     UserMessage,
 )
@@ -81,12 +80,12 @@ def build_compression_plan(
     token_counter: TokenCounter,
 ) -> CompressionPlan:
     """Build a compression plan after the caller has already decided to compress."""
-    if context_start_index < 0 or context_start_index > len(history):
+    if context_start_index < 1 or context_start_index > len(history):
         raise ValueError("context_start_index is out of range")
     if keep_recent_tokens <= 0:
         raise ValueError("keep_recent_tokens must be positive")
 
-    compressible_start = _compressible_start(history, context_start_index)
+    compressible_start = context_start_index
     if compressible_start >= len(history):
         raise ValueError("history has no active messages to compress")
 
@@ -104,13 +103,6 @@ def build_compression_plan(
         split_range=split_range,
         keep_range=MessageRange(keep_start, len(history)),
     )
-
-
-def _compressible_start(history: MessageHistory, context_start_index: int) -> int:
-    if context_start_index == 0 and history and isinstance(history[0], SystemMessage):
-        return 1
-    return context_start_index
-
 
 def _count_tokens(messages: MessageHistory, token_counter: TokenCounter) -> int:
     token_total = 0

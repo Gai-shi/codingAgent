@@ -97,7 +97,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
 
         plan = build_compression_plan(
             history=history,
-            context_start_index=0,
+            context_start_index=1,
             keep_recent_tokens=2,
             token_counter=one_token,
         )
@@ -122,7 +122,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
 
         plan = build_compression_plan(
             history=history,
-            context_start_index=0,
+            context_start_index=1,
             keep_recent_tokens=1,
             token_counter=one_token,
         )
@@ -142,7 +142,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
 
         plan = build_compression_plan(
             history=history,
-            context_start_index=0,
+            context_start_index=1,
             keep_recent_tokens=2,
             token_counter=one_token,
         )
@@ -182,7 +182,7 @@ class ContextCompressionPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "leaves no messages to summarize"):
             build_compression_plan(
                 history=history,
-                context_start_index=0,
+                context_start_index=1,
                 keep_recent_tokens=99,
                 token_counter=one_token,
             )

@@ -5,6 +5,7 @@ import unittest
 
 from ai_job.communication import (
     AssistantMessage,
+    MessageState,
     SummaryMessage,
     SystemMessage,
     ToolMessage,
@@ -67,6 +68,45 @@ def make_app_env():
 
 
 class MessageDebugTest(unittest.TestCase):
+    def test_message_state_defaults_to_context_after_system_message(self):
+        hidden_message = AssistantMessage(content="hidden", visible_to_model=False)
+        history = [
+            SystemMessage(content="system"),
+            UserMessage(content="active"),
+            hidden_message,
+        ]
+
+        message_state = MessageState(history=history)
+
+        self.assertEqual(
+            message_state.model_visible_history(),
+            [
+                SystemMessage(content="system"),
+                UserMessage(content="active"),
+            ],
+        )
+
+    def test_message_state_rejects_zero_context_start_index(self):
+        message_state = MessageState(
+            history=[SystemMessage(content="system"), UserMessage(content="active")],
+            context_start_index=0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            message_state.model_visible_history()
+
+    def test_message_state_rejects_empty_history_for_model_context(self):
+        message_state = MessageState(history=[])
+
+        with self.assertRaisesRegex(ValueError, "system message"):
+            message_state.model_visible_history()
+
+    def test_message_state_requires_system_message_at_index_zero(self):
+        message_state = MessageState(history=[UserMessage(content="active")])
+
+        with self.assertRaisesRegex(ValueError, "SystemMessage"):
+            message_state.model_visible_history()
+
     def test_message_history_to_debug_dicts_preserves_roles_and_tool_calls(self):
         history = [
             SystemMessage(content="system"),

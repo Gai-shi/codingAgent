@@ -251,7 +251,9 @@ class AgentRunnerTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "最终响应缺少文本"):
-            runner.run_turn(MessageState(history=[UserMessage(content="hi")]))
+            runner.run_turn(
+                MessageState(history=[SystemMessage(content="sys"), UserMessage(content="hi")])
+            )
 
     def test_run_turn_stops_after_max_tool_rounds(self):
         registry = ToolRegistry([EchoTool()])
@@ -272,4 +274,6 @@ class AgentRunnerTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "工具调用轮数超过上限"):
-            runner.run_turn(MessageState(history=[UserMessage(content="hi")]))
+            runner.run_turn(
+                MessageState(history=[SystemMessage(content="sys"), UserMessage(content="hi")])
+            )

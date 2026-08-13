@@ -61,18 +61,12 @@ class MessageState:
     """Mutable conversation state shared by agent loop and tools."""
 
     history: MessageHistory
-    context_start_index: int = 0
+    context_start_index: int = 1
 
     def model_visible_history(self) -> MessageHistory:
         """Return the single source of truth for messages sent to the model."""
         self._validate_context_start_index()
-        if not self.history:
-            return []
-
-        if self.context_start_index == 0:
-            candidate_messages = self.history
-        else:
-            candidate_messages = [self.history[0], *self.history[self.context_start_index :]]
+        candidate_messages = [self.history[0], *self.history[self.context_start_index :]]
         return self._visible_messages(candidate_messages)
 
     def visible_history_range(self, start: int, end: int) -> MessageHistory:
@@ -82,7 +76,13 @@ class MessageState:
         return self._visible_messages(self.history[start:end])
 
     def _validate_context_start_index(self) -> None:
-        if self.context_start_index < 0 or self.context_start_index > len(self.history):
+        if not self.history:
+            raise ValueError("history must contain a system message")
+        if not isinstance(self.history[0], SystemMessage):
+            raise ValueError("history[0] must be a SystemMessage")
+        if self.context_start_index < 1:
+            raise ValueError("context_start_index must be at least 1")
+        if self.context_start_index > len(self.history):
             raise ValueError("context_start_index is out of range")
 
     @staticmethod
