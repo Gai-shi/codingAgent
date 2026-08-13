@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from ai_job.chat_cli import (
     APP_ROOT,
-    build_initial_messages,
     default_session_record_path,
     default_trace_log_path,
     main,
@@ -19,7 +19,7 @@ from ai_job.chat_cli import (
     resolve_workspace_root,
 )
 from ai_job.communication import AssistantMessage, MessageState, SystemMessage, ToolMessage, UserMessage
-from ai_job.infra.env import AppEnv
+from ai_job.tools import ToolRegistry
 
 
 class ChatCliWorkspaceTest(unittest.TestCase):
@@ -50,27 +50,6 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                 resolve_workspace_root(str(workspace / "missing"))
             with self.assertRaisesRegex(ValueError, "workspace 不是目录"):
                 resolve_workspace_root(str(file_path))
-
-    def test_build_initial_messages_includes_workspace_root(self):
-        app_env = AppEnv(
-            openai_api_key="key",
-            openai_model="model",
-            openai_base_url="http://localhost:8787/v1",
-            timeout_seconds=60.0,
-            max_tool_rounds=8,
-            context_window_override=None,
-            compaction_reserve_tokens=16384,
-            compaction_keep_recent_tokens=20000,
-            system_prompt="system prompt",
-            filter_terminal_log_level="none",
-        )
-        workspace = Path("/tmp/example-workspace")
-
-        messages = build_initial_messages(app_env, workspace)
-
-        self.assertEqual(len(messages), 1)
-        self.assertIn("system prompt", messages[0].content)
-        self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
 
     def test_context_output_uses_model_visible_history(self):
         message_state = MessageState(
@@ -146,7 +125,17 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                                 "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
                             ) as session_cleanup_mock:
                                 with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
-                                    with patch("ai_job.chat_cli.AgentRunner") as agent_runner_mock:
+                                    runtime = SimpleNamespace(
+                                        message_state=MessageState(
+                                            history=[SystemMessage(content="system prompt")]
+                                        ),
+                                        tool_registry=ToolRegistry([]),
+                                        agent_runner=SimpleNamespace(run_turn=lambda _message_state: "unused"),
+                                    )
+                                    with patch(
+                                        "ai_job.chat_cli.create_cli_runtime",
+                                        return_value=runtime,
+                                    ) as create_runtime_mock:
                                         with patch("builtins.input", side_effect=EOFError):
                                             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                                                 exit_code = main(["--workspace", tmp_dir])
@@ -171,8 +160,13 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertEqual(record_session_mock.call_args_list[0].args[2], "text")
         self.assertEqual(record_session_mock.call_args_list[1].args[0], "MessageState raw")
         self.assertEqual(record_session_mock.call_args_list[2].args[0], "MessageState model_visible")
-        self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
-        self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
+        create_runtime_mock.assert_called_once()
+        self.assertEqual(
+            create_runtime_mock.call_args.kwargs["workspace_root"],
+            Path(tmp_dir).resolve(),
+        )
+        self.assertTrue(callable(create_runtime_mock.call_args.kwargs["request_protected_grep_approval"]))
+        self.assertTrue(create_runtime_mock.call_args.kwargs["include_compress_tool"])
 
     def test_main_can_disable_compress_tool_registration(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -190,23 +184,29 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                         with patch("ai_job.chat_cli.SessionRecorder.configure"):
                             with patch("ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"):
                                 with patch("ai_job.chat_cli.SessionRecorder.record_session"):
-                                    with patch("ai_job.chat_cli.create_default_tool_registry") as registry_mock:
-                                        with patch("ai_job.chat_cli.ToolExecutor"):
-                                            with patch("ai_job.chat_cli.OpenAIModel"):
-                                                with patch("ai_job.chat_cli.create_compression_manager"):
-                                                    with patch("ai_job.chat_cli.AgentRunner"):
-                                                        with patch("builtins.input", side_effect=EOFError):
-                                                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                                                                exit_code = main(
-                                                                    [
-                                                                        "--workspace",
-                                                                        tmp_dir,
-                                                                        "--disable-compress-tool",
-                                                                    ]
-                                                                )
+                                    runtime = SimpleNamespace(
+                                        message_state=MessageState(
+                                            history=[SystemMessage(content="system prompt")]
+                                        ),
+                                        tool_registry=ToolRegistry([]),
+                                        agent_runner=SimpleNamespace(run_turn=lambda _message_state: "unused"),
+                                    )
+                                    with patch(
+                                        "ai_job.chat_cli.create_cli_runtime",
+                                        return_value=runtime,
+                                    ) as create_runtime_mock:
+                                        with patch("builtins.input", side_effect=EOFError):
+                                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                                exit_code = main(
+                                                    [
+                                                        "--workspace",
+                                                        tmp_dir,
+                                                        "--disable-compress-tool",
+                                                    ]
+                                                )
 
         self.assertEqual(exit_code, 0)
-        self.assertFalse(registry_mock.call_args.kwargs["include_compress_tool"])
+        self.assertFalse(create_runtime_mock.call_args.kwargs["include_compress_tool"])
 
 
 if __name__ == "__main__":

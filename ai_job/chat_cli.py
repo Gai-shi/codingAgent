@@ -2,7 +2,7 @@
 
 当前文件只负责：
 - 从项目级 .env 和环境变量读取配置；
-- 组装 CLI 需要的 agent / provider / tool 对象；
+- 通过 composition 创建 CLI 运行时对象；
 - 维护当前进程内存里的消息历史；
 - 处理终端输入输出。
 
@@ -18,21 +18,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from .agent import AgentRunner
-from .composition import create_compression_manager
+from .composition import create_cli_runtime
 from .communication import (
     MessageHistory,
     MessageState,
-    SystemMessage,
     UserMessage,
     message_history_to_debug_dicts,
 )
 from .infra.env import AppEnv, EnvLoader
 from .infra.logging import LogWrapper
 from .infra.session_recording import SessionRecorder
-from .provider_adapters import OpenAIModel
 from .terminal_input import AllowInputEcho, SuppressInputEchoAndDiscard
-from .tools import ToolExecutor, ToolRegistry, create_default_tool_registry
+from .tools import ToolRegistry
 
 
 EXIT_COMMANDS = {"exit", "quit", "et", "/exit", "/quit"}
@@ -96,11 +93,6 @@ def create_protected_grep_approval(workspace_root: Path) -> Callable[[Path], boo
         return answer == "yes"
 
     return request_protected_grep_approval
-
-
-def build_initial_messages(app_env: AppEnv, workspace_root: Path) -> MessageHistory:
-    system_prompt = f"{app_env.system_prompt}\n\nCurrent workspace root: {workspace_root}"
-    return [SystemMessage(content=system_prompt)]
 
 
 def print_banner(app_env: AppEnv, tool_registry: ToolRegistry, workspace_root: Path) -> None:
@@ -175,25 +167,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 2
 
-    message_state = MessageState(history=build_initial_messages(app_env, workspace_root))
-    messages = message_state.history
-    SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
-    tool_registry = create_default_tool_registry(
-        workspace_root,
-        create_protected_grep_approval(workspace_root),
+    runtime = create_cli_runtime(
+        app_env=app_env,
+        workspace_root=workspace_root,
+        request_protected_grep_approval=create_protected_grep_approval(workspace_root),
         include_compress_tool=not args.disable_compress_tool,
     )
-    tool_executor = ToolExecutor(tool_registry)
-    chat_model = OpenAIModel(app_env)
-    compression_manager = create_compression_manager(app_env, chat_model)
-    agent_runner = AgentRunner(
-        chat_model=chat_model,
-        tool_registry=tool_registry,
-        tool_executor=tool_executor,
-        max_tool_rounds=app_env.max_tool_rounds,
-        compression_manager=compression_manager,
-    )
-    print_banner(app_env, tool_registry, workspace_root)
+    message_state = runtime.message_state
+    agent_runner = runtime.agent_runner
+    messages = message_state.history
+    SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
+    print_banner(app_env, runtime.tool_registry, workspace_root)
     enable_line_editing()
 
     while True:
