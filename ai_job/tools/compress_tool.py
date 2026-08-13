@@ -78,13 +78,11 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
                 f"with arguments {_canonical_json(replacement.tool_arguments)}"
             )
 
-        matching_targets = targets_by_key[replacement.call_signature()]
         uncompressed_targets = [
             tool_message for tool_message in matching_targets if not tool_message.compressions
         ]
         if len(matching_targets) == 1:
-            if uncompressed_targets:
-                pending_compressions.append((matching_targets[0], replacement.replace_content))
+            pending_compressions.append((matching_targets[0], replacement.replace_content))
             continue
 
         for tool_message in uncompressed_targets[:-1]:

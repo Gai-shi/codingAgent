@@ -260,7 +260,7 @@ class ToolContractsTest(unittest.TestCase):
         self.assertEqual(second_tool_message.compressions, ["short"])
         self.assertEqual(third_tool_message.compressions, [])
 
-    def test_compress_tool_reports_no_changes_when_match_is_already_compressed(self):
+    def test_compress_tool_updates_single_already_compressed_match(self):
         tool_message = ToolMessage(
             tool_call_id="call-1",
             content="large result",
@@ -292,5 +292,5 @@ class ToolContractsTest(unittest.TestCase):
             ToolExecutionContext(message_state=message_state),
         )
 
-        self.assertEqual(result, "No changes: all matching tool results are already compressed")
-        self.assertEqual(tool_message.compressions, ["already short"])
+        self.assertEqual(result, "Success")
+        self.assertEqual(tool_message.compressions, ["already short", "new short"])
