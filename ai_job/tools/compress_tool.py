@@ -48,7 +48,7 @@ COMPRESS_TOOL_PARAMETERS_SCHEMA: dict[str, Any] = {
 
 def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     replacements = _parse_replacements(arguments)
-    tool_messages = _tool_messages_by_id(context.message_history)
+    tool_messages = _tool_messages_by_id(context.message_state.model_visible_history())
 
     missing_ids = [
         tool_call_id for tool_call_id, _ in replacements if tool_call_id not in tool_messages

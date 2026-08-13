@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from ai_job.tools import BaseTool, ToolCall, ToolExecutor, ToolRegistry
+from ai_job.communication import MessageState, SystemMessage, ToolMessage, UserMessage
+from ai_job.tools import BaseTool, CompressTool, ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
 
 
 class SuccessfulTool(BaseTool):
@@ -61,3 +62,32 @@ class ToolContractsTest(unittest.TestCase):
         result = SuccessfulTool().execute("not a dict")
 
         self.assertEqual(result, "Error: invalid tool arguments: expected a JSON object")
+
+    def test_compress_tool_uses_model_visible_history(self):
+        old_tool_message = ToolMessage(tool_call_id="call-1", content="old result")
+        active_tool_message = ToolMessage(tool_call_id="call-1", content="active result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                old_tool_message,
+                UserMessage(content="active"),
+                active_tool_message,
+            ],
+            context_start_index=2,
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_call_id": "call-1",
+                        "replace_content": "compressed active result",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(old_tool_message.compressions, [])
+        self.assertEqual(active_tool_message.compressions, ["compressed active result"])
