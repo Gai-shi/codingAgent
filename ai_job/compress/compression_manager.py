@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..communication import MessageHistory, SummaryMessage, SystemMessage
+from ..communication import MessageHistory, MessageState, SummaryMessage, SystemMessage
 from .context_compression import (
     CompressionPlan,
     TokenCounter,
@@ -26,18 +26,17 @@ class CompressionManager:
         keep_recent_tokens: int,
         token_counter: TokenCounter,
         summarizer: Summarizer,
-        context_start_index: int = 0,
     ) -> None:
         self._context_window = context_window
         self._reserve_tokens = reserve_tokens
         self._keep_recent_tokens = keep_recent_tokens
         self._token_counter = token_counter
         self._summarizer = summarizer
-        self._context_start_index = context_start_index
 
-    def compress_if_needed(self, history: MessageHistory) -> None:
+    def compress_if_needed(self, message_state: MessageState) -> None:
         """Mutate history in-place when the active context exceeds the compression threshold."""
-        active_context = self._active_context(history)
+        history = message_state.history
+        active_context = self._active_context(message_state)
         trigger = check_compression_trigger(
             active_context=active_context,
             context_window=self._context_window,
@@ -49,19 +48,21 @@ class CompressionManager:
 
         plan = build_compression_plan(
             history=history,
-            context_start_index=self._context_start_index,
+            context_start_index=message_state.context_start_index,
             keep_recent_tokens=self._keep_recent_tokens,
             token_counter=self._token_counter,
         )
         summary = self._summarizer(plan, history)
-        history[:] = self._compressed_history(history, plan, summary)
+        message_state.history[:] = self._compressed_history(history, plan, summary)
+        message_state.context_start_index = 1 if _has_system_message(message_state.history) else 0
 
-    def _active_context(self, history: MessageHistory) -> MessageHistory:
+    def _active_context(self, message_state: MessageState) -> MessageHistory:
+        history = message_state.history
         if not history:
             return []
 
-        active_messages = history[self._context_start_index :]
-        if self._context_start_index > 0 and isinstance(history[0], SystemMessage):
+        active_messages = history[message_state.context_start_index :]
+        if message_state.context_start_index > 0 and _has_system_message(history):
             return [history[0], *active_messages]
         return active_messages
 
@@ -77,3 +78,7 @@ class CompressionManager:
             summary,
             *history[plan.keep_range.start : plan.keep_range.end],
         ]
+
+
+def _has_system_message(history: MessageHistory) -> bool:
+    return bool(history) and isinstance(history[0], SystemMessage)

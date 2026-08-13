@@ -10,7 +10,14 @@ from ai_job.compress import (
     build_compression_plan,
     check_compression_trigger,
 )
-from ai_job.communication import AssistantMessage, SummaryMessage, SystemMessage, ToolMessage, UserMessage
+from ai_job.communication import (
+    AssistantMessage,
+    MessageState,
+    SummaryMessage,
+    SystemMessage,
+    ToolMessage,
+    UserMessage,
+)
 from ai_job.tools import ToolCall
 
 
@@ -196,7 +203,7 @@ class CompressionManagerTest(unittest.TestCase):
             summarizer=lambda plan, current_history: calls.append((plan, current_history)),
         )
 
-        manager.compress_if_needed(history)
+        manager.compress_if_needed(MessageState(history=history))
 
         self.assertEqual(calls, [])
         self.assertEqual(
@@ -231,11 +238,14 @@ class CompressionManagerTest(unittest.TestCase):
             summarizer=summarize,
         )
 
-        manager.compress_if_needed(history)
+        message_state = MessageState(history=history)
+
+        manager.compress_if_needed(message_state)
 
         self.assertIsInstance(history[0], SystemMessage)
         self.assertEqual(history[1], summary)
         self.assertEqual(history[2:], original_history[3:])
+        self.assertEqual(message_state.context_start_index, 1)
         self.assertEqual(received[0][0].complete_range, MessageRange(1, 3))
         self.assertEqual(received[0][0].keep_range, MessageRange(3, 5))
         self.assertEqual(received[0][1], original_history)
@@ -262,7 +272,7 @@ class CompressionManagerTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "summary failed"):
-            manager.compress_if_needed(history)
+            manager.compress_if_needed(MessageState(history=history))
 
         self.assertEqual(history, original_history)
 

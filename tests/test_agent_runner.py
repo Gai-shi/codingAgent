@@ -61,8 +61,8 @@ class RecordingCompressionManager:
     def __init__(self):
         self.seen_histories = []
 
-    def compress_if_needed(self, history):
-        self.seen_histories.append(list(history))
+    def compress_if_needed(self, message_state):
+        self.seen_histories.append(list(message_state.history))
 
 
 class AgentRunnerTest(unittest.TestCase):
@@ -204,12 +204,14 @@ class AgentRunnerTest(unittest.TestCase):
         model = ScriptedChatModel([AssistantMessage(content="done")])
 
         class RewritingCompressionManager:
-            def compress_if_needed(self, history):
-                history[:] = [
+            def compress_if_needed(self, message_state):
+                history = message_state.history
+                message_state.history[:] = [
                     history[0],
                     SummaryMessage(complete_turn_summary="compressed"),
                     history[-1],
                 ]
+                message_state.context_start_index = 1
 
         runner = AgentRunner(
             chat_model=model,

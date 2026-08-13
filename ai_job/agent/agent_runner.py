@@ -43,7 +43,7 @@ class AgentRunner:
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
             if self._compression_manager is not None:
-                self._compression_manager.compress_if_needed(history)
+                self._compression_manager.compress_if_needed(message_state)
             assistant_message = self._chat_model.complete(
                 self._build_model_history(message_state),
                 self._tool_registry,
