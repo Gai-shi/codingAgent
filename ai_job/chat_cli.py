@@ -141,11 +141,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     messages = build_initial_messages(app_env, workspace_root)
     SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
-    tool_registry = create_default_tool_registry(
-        workspace_root,
-        create_protected_grep_approval(workspace_root),
-        message_history=messages,
-    )
+    tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
     compression_manager = create_compression_manager(app_env, chat_model)

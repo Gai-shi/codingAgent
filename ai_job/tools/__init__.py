@@ -1,7 +1,7 @@
 """Tool package exports."""
 
 from .apply_patch_tool import ApplyPatchTool
-from .base_tool import BaseTool
+from .base_tool import BaseTool, ToolExecutionContext
 from .compress_tool import CompressTool
 from .defaults import create_default_tool_registry
 from .grep_tool import GrepTool
@@ -17,6 +17,7 @@ __all__ = [
     "GrepTool",
     "ReadFileTool",
     "ToolCall",
+    "ToolExecutionContext",
     "ToolExecutor",
     "ToolRegistry",
     "create_default_tool_registry",

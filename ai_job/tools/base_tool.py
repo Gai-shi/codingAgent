@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..communication import MessageHistory
+
+
+@dataclass
+class ToolExecutionContext:
+    message_history: MessageHistory
 
 
 class BaseTool:
@@ -16,11 +25,15 @@ class BaseTool:
     description: str = ""
     parameters_schema: dict[str, Any] = {"type": "object", "properties": {}}
 
-    def execute(self, arguments: dict[str, Any]) -> str:
+    def execute(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext | None = None,
+    ) -> str:
         """Run the tool and convert failures into model-readable text."""
         try:
             self.validate_arguments(arguments)
-            result = self._run(arguments)
+            result = self._run_with_context(arguments, context)
             if not isinstance(result, str):
                 raise TypeError(f"tool {self.name} returned non-string value")
             return result
@@ -34,6 +47,13 @@ class BaseTool:
         """
         if not isinstance(arguments, dict):
             raise ValueError("invalid tool arguments: expected a JSON object")
+
+    def _run_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext | None,
+    ) -> str:
+        return self._run(arguments)
 
     def _run(self, arguments: dict[str, Any]) -> str:
         raise NotImplementedError

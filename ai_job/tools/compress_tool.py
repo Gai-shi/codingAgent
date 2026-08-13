@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
-from .base_tool import BaseTool
-
-if TYPE_CHECKING:
-    from ..communication import MessageHistory
+from .base_tool import BaseTool, ToolExecutionContext
 
 
 COMPRESS_TOOL_DESCRIPTION = (
@@ -43,9 +40,9 @@ COMPRESS_TOOL_PARAMETERS_SCHEMA: dict[str, Any] = {
 }
 
 
-def compress_tool_messages(arguments: dict[str, Any], history: "MessageHistory") -> str:
+def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
     replacements = _parse_replacements(arguments)
-    tool_messages = _tool_messages_by_id(history)
+    tool_messages = _tool_messages_by_id(context.message_history)
 
     missing_ids = [
         tool_call_id for tool_call_id, _ in replacements if tool_call_id not in tool_messages
@@ -113,8 +110,11 @@ class CompressTool(BaseTool):
     description = COMPRESS_TOOL_DESCRIPTION
     parameters_schema = COMPRESS_TOOL_PARAMETERS_SCHEMA
 
-    def __init__(self, history: "MessageHistory") -> None:
-        self._history = history
-
-    def _run(self, arguments: dict[str, Any]) -> str:
-        return compress_tool_messages(arguments, self._history)
+    def _run_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext | None,
+    ) -> str:
+        if context is None:
+            raise ValueError("compress_tool requires tool execution context")
+        return compress_tool_messages(arguments, context)

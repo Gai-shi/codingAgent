@@ -9,7 +9,7 @@ from ..communication import MessageHistory, SystemMessage, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
-from ..tools import ToolCall, ToolExecutor, ToolRegistry
+from ..tools import ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
 from .message_visibility import MessageVisibilityManager
 
 
@@ -74,7 +74,10 @@ class AgentRunner:
                     ),
                 )
                 SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), "json")
-                tool_content = self._tool_executor.execute(tool_call)
+                tool_content = self._tool_executor.execute(
+                    tool_call,
+                    ToolExecutionContext(message_history=history),
+                )
                 tool_message_index = len(history)
                 history.append(
                     ToolMessage(
