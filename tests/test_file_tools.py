@@ -38,9 +38,12 @@ class FileToolsTest(unittest.TestCase):
 
     def test_read_file_text_blocks_protected_paths_and_workspace_escape(self):
         self._write_text(".env", "OPENAI_API_KEY=secret\n")
+        self._write_text(".git/config", "secret\n")
 
         with self.assertRaisesRegex(PermissionError, "protected path"):
             read_file_text({"path": ".env"}, self.workspace_root)
+        with self.assertRaisesRegex(PermissionError, "protected path"):
+            read_file_text({"path": ".git/config"}, self.workspace_root)
 
         with self.assertRaisesRegex(ValueError, "escapes workspace"):
             read_file_text({"path": "../outside.txt"}, self.workspace_root)
@@ -66,6 +69,7 @@ class FileToolsTest(unittest.TestCase):
         self._write_text("b.md", "needle in markdown\n")
         self._write_text(".git/config", "needle in git\n")
         self._write_text(".env", "needle in env\n")
+        (self.workspace_root / "binary.py").write_bytes(b"needle \xff")
 
         result = grep_text({"pattern": "needle", "type": "py"}, self.workspace_root)
 
@@ -73,6 +77,7 @@ class FileToolsTest(unittest.TestCase):
         self.assertNotIn("b.md", result)
         self.assertNotIn(".git/config", result)
         self.assertNotIn(".env", result)
+        self.assertNotIn("binary.py", result)
 
     def test_grep_text_returns_no_matches_message(self):
         self._write_text("a.py", "haystack\n")
@@ -100,6 +105,17 @@ class FileToolsTest(unittest.TestCase):
 
         self.assertEqual(approved_paths, [self.workspace_root / ".hidden"])
         self.assertIn(".hidden/secret.txt:1:needle", result)
+
+    def test_grep_text_can_include_protected_file_names_after_approval(self):
+        self._write_text(".env", "needle in env\n")
+
+        result = grep_text(
+            {"pattern": "needle", "include_protected": True},
+            self.workspace_root,
+            lambda path: True,
+        )
+
+        self.assertIn(".env:1:needle in env", result)
 
     def test_grep_text_rejects_include_protected_when_user_denies(self):
         self._write_text(".hidden/secret.txt", "needle\n")
@@ -133,6 +149,13 @@ class FileToolsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "invalid regex pattern"):
             grep_text({"pattern": "["}, self.workspace_root)
+
+        with self.assertRaisesRegex(FileNotFoundError, "directory not found"):
+            grep_text({"pattern": "needle", "path": "missing"}, self.workspace_root)
+
+        self._write_text("file.txt", "needle\n")
+        with self.assertRaisesRegex(ValueError, "not a directory"):
+            grep_text({"pattern": "needle", "path": "file.txt"}, self.workspace_root)
 
     def test_grep_text_requires_callback_when_include_protected_is_true(self):
         self._write_text(".hidden/secret.txt", "needle\n")

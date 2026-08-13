@@ -348,6 +348,13 @@ class OpenAIModelTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "缺少 choices"):
             model.complete([UserMessage(content="hi")], ToolRegistry([]))
 
+        empty_choices_model = OpenAIModel(
+            make_app_env(),
+            http_client=FakeHttpClient(json.dumps({"choices": []})),
+        )
+        with self.assertRaisesRegex(RuntimeError, "缺少 choices"):
+            empty_choices_model.complete([UserMessage(content="hi")], ToolRegistry([]))
+
     def test_complete_wraps_http_client_errors_as_llm_request_failures(self):
         model = OpenAIModel(
             make_app_env(),
@@ -398,6 +405,25 @@ class OpenAIModelTest(unittest.TestCase):
                     }
                 ),
                 "tool_call 格式异常",
+            ),
+            (
+                json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "function": {"name": "example", "arguments": "{}"},
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "missing id",
             ),
         ]
 

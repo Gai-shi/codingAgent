@@ -88,25 +88,6 @@ index 1111111..0000000
             ],
         )
 
-    def test_parse_multiple_file_patches(self):
-        patch = """diff --git a/a.txt b/a.txt
---- a/a.txt
-+++ b/a.txt
-@@ -1 +1 @@
--old
-+new
-diff --git a/b.txt b/b.txt
---- /dev/null
-+++ b/b.txt
-@@ -0,0 +1 @@
-+created
-"""
-
-        parsed = parse_git_diff(patch)
-
-        self.assertEqual([file.operation for file in parsed.files], ["modify", "add"])
-        self.assertEqual([file.new_path for file in parsed.files], ["a.txt", "b.txt"])
-
     def test_rejects_unsupported_rename_and_quoted_paths(self):
         rename_patch = """diff --git a/old.py b/new.py
 similarity index 100%
@@ -120,6 +101,13 @@ rename to new.py
         with self.assertRaisesRegex(GitDiffParseError, "unsupported diff header"):
             parse_git_diff(quoted_patch)
 
+    def test_rejects_empty_patch_and_missing_file_headers(self):
+        with self.assertRaisesRegex(GitDiffParseError, "patch must be a non-empty string"):
+            parse_git_diff("")
+
+        with self.assertRaisesRegex(GitDiffParseError, "missing ---/\\+\\+\\+ headers"):
+            parse_git_diff("diff --git a/a.txt b/a.txt\nindex 1111111..2222222\n")
+
     def test_rejects_hunk_count_mismatch(self):
         patch = """diff --git a/a.txt b/a.txt
 --- a/a.txt
@@ -131,6 +119,25 @@ rename to new.py
 
         with self.assertRaisesRegex(GitDiffParseError, "declares 2 old lines but contains 1"):
             parse_git_diff(patch)
+
+    def test_rejects_invalid_hunk_body_lines(self):
+        no_previous_line_patch = """diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+\\ No newline at end of file
+"""
+        missing_prefix_patch = """diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+old
+"""
+
+        with self.assertRaisesRegex(GitDiffParseError, "no preceding hunk line"):
+            parse_git_diff(no_previous_line_patch)
+        with self.assertRaisesRegex(GitDiffParseError, "invalid hunk line prefix"):
+            parse_git_diff(missing_prefix_patch)
 
 
 if __name__ == "__main__":

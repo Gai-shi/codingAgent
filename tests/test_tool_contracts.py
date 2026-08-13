@@ -41,6 +41,13 @@ class ToolContractsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate tool name"):
             ToolRegistry([SuccessfulTool(), SuccessfulTool()])
 
+    def test_tool_registry_rejects_empty_tool_name(self):
+        class EmptyNameTool(BaseTool):
+            name = ""
+
+        with self.assertRaisesRegex(ValueError, "tool name must not be empty"):
+            ToolRegistry([EmptyNameTool()])
+
     def test_tool_executor_returns_unknown_tool_error(self):
         executor = ToolExecutor(ToolRegistry([]))
 
@@ -91,3 +98,45 @@ class ToolContractsTest(unittest.TestCase):
         self.assertEqual(result, "Success")
         self.assertEqual(old_tool_message.compressions, [])
         self.assertEqual(active_tool_message.compressions, ["compressed active result"])
+
+    def test_compress_tool_requires_context_and_valid_replacements(self):
+        result_without_context = CompressTool().execute(
+            {"replacements": [{"tool_call_id": "call-1", "replace_content": "short"}]}
+        )
+        result_without_replacements = CompressTool().execute(
+            {},
+            ToolExecutionContext(message_state=MessageState(history=[SystemMessage(content="sys")])),
+        )
+
+        self.assertEqual(
+            result_without_context,
+            "Error: compress_tool requires tool execution context",
+        )
+        self.assertIn('"replacements" must be a non-empty list', result_without_replacements)
+
+    def test_compress_tool_rejects_unknown_and_duplicate_tool_call_ids(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                ToolMessage(tool_call_id="call-1", content="old result"),
+            ]
+        )
+        context = ToolExecutionContext(message_state=message_state)
+
+        unknown_result = CompressTool().execute(
+            {"replacements": [{"tool_call_id": "missing", "replace_content": "short"}]},
+            context,
+        )
+        duplicate_result = CompressTool().execute(
+            {
+                "replacements": [
+                    {"tool_call_id": "call-1", "replace_content": "short 1"},
+                    {"tool_call_id": "call-1", "replace_content": "short 2"},
+                ]
+            },
+            context,
+        )
+
+        self.assertIn('unknown tool_call_id: "missing"', unknown_result)
+        self.assertIn('duplicate tool_call_id in replacements: "call-1"', duplicate_result)
+        self.assertEqual(message_state.history[1].compressions, [])

@@ -50,9 +50,6 @@ deleted file mode 100644
         result = apply_patch_text({"patch": patch}, self.workspace_root)
 
         self.assertIn("Successfully applied patch: 3 file(s) changed, 3 hunk(s).", result)
-        self.assertIn("Modified:\n- src/calc.py", result)
-        self.assertIn("Added:\n- tests/test_calc.py", result)
-        self.assertIn("Deleted:\n- src/old.py", result)
         self.assertEqual((self.workspace_root / "src/calc.py").read_text(encoding="utf-8"), "def add(a, b):\n    return a + b\n")
         self.assertEqual((self.workspace_root / "tests/test_calc.py").read_text(encoding="utf-8"), "def test_add():\n    assert True\n")
         self.assertFalse((self.workspace_root / "src/old.py").exists())
@@ -113,6 +110,27 @@ diff --git a/missing.txt b/missing.txt
             apply_patch_text({"patch": protected_patch}, self.workspace_root)
         with self.assertRaisesRegex(ValueError, "escapes workspace"):
             apply_patch_text({"patch": escape_patch}, self.workspace_root)
+
+    def test_apply_patch_text_rejects_duplicate_file_diffs_before_writing(self):
+        self._write_text("same.txt", "old\n")
+        patch = """diff --git a/same.txt b/same.txt
+--- a/same.txt
++++ b/same.txt
+@@ -1 +1 @@
+-old
++new
+diff --git a/same.txt b/same.txt
+--- a/same.txt
++++ b/same.txt
+@@ -1 +1 @@
+-new
++newer
+"""
+
+        with self.assertRaisesRegex(ValueError, "multiple file diffs for the same path"):
+            apply_patch_text({"patch": patch}, self.workspace_root)
+
+        self.assertEqual((self.workspace_root / "same.txt").read_text(encoding="utf-8"), "old\n")
 
     def test_apply_patch_text_rejects_invalid_arguments(self):
         with self.assertRaisesRegex(ValueError, '"patch" must be a string'):

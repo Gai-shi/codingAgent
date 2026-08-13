@@ -35,6 +35,23 @@ class SessionRecorderTest(unittest.TestCase):
             self.assertIn("## 10:38:13 ToolCall read_file", session_text)
             self.assertIn('```json\n{\n  "path": "README.md"\n}\n```', session_text)
 
+    def test_session_recorder_uses_longer_fence_for_content_with_backticks(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = Path(tmp_dir) / "sessions" / "sessions.md"
+
+            SessionRecorder.configure(session_path=base_path)
+            SessionRecorder.record_session("ToolResult", "before\n```text\ninside\n```\nafter", "text")
+
+            session_text = SessionRecorder.session_path().read_text(encoding="utf-8")
+            self.assertIn("````text\nbefore\n```text\ninside\n```\nafter\n````", session_text)
+
+    def test_session_recorder_rejects_unknown_record_format(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            SessionRecorder.configure(session_path=Path(tmp_dir) / "sessions.md")
+
+            with self.assertRaisesRegex(ValueError, "未知会话记录格式"):
+                SessionRecorder.record_session("UserMessage", "content", "xml")
+
     def test_session_recorder_cleanup_deletes_records_older_than_one_month_by_filename(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             session_dir = Path(tmp_dir) / "sessions"
