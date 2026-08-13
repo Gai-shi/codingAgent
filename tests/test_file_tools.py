@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_job.tools import ApplyPatchTool, GrepTool, ReadFileTool, create_default_tool_registry
+from ai_job.tools import (
+    ApplyPatchTool,
+    CompressTool,
+    GrepTool,
+    ReadFileTool,
+    create_default_tool_registry,
+)
 from ai_job.tools.grep_tool import GREP_MAX_MATCHES, grep_text, normalize_file_type
 from ai_job.tools.read_file_tool import read_file_text
 
@@ -152,7 +158,8 @@ class FileToolsTest(unittest.TestCase):
     def test_tool_classes_and_default_registry_wire_file_tools(self):
         registry = create_default_tool_registry(self.workspace_root)
 
-        self.assertEqual(registry.names(), ["read_file", "grep", "apply_patch"])
+        self.assertEqual(registry.names(), ["read_file", "grep", "apply_patch", "compress_tool"])
         self.assertIsInstance(registry.get("read_file"), ReadFileTool)
         self.assertIsInstance(registry.get("grep"), GrepTool)
         self.assertIsInstance(registry.get("apply_patch"), ApplyPatchTool)
+        self.assertIsInstance(registry.get("compress_tool"), CompressTool)
