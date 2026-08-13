@@ -4,9 +4,21 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .base_tool import BaseTool, ToolExecutionContext
+
+if TYPE_CHECKING:
+    from ..communication import MessageHistory, ToolMessage
+
+
+@dataclass(frozen=True)
+class ToolCallSignature:
+    tool_name: str
+    arguments_json: str
+
+
+ToolMessageTargetsBySignature = dict[ToolCallSignature, list["ToolMessage"]]
 
 
 COMPRESS_TOOL_DESCRIPTION = (
@@ -18,8 +30,8 @@ COMPRESS_TOOL_DESCRIPTION = (
     "diff, patch, or test failure detail that may need exact quoting, or when you are unsure which "
     "details will matter later. "
     "Pass replacements as objects containing tool_name, the exact tool_arguments originally used, "
-    "and replace_content. If the original tool call cannot be matched uniquely, no compression is "
-    "applied."
+    "and replace_content. If the same call arguments have multiple uncompressed tool results, the "
+    "latest uncompressed result is kept and earlier uncompressed duplicate results are compressed."
 )
 COMPRESS_TOOL_PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -59,8 +71,11 @@ class Replacement:
     tool_arguments: dict[str, Any]
     replace_content: str
 
-    def match_key(self) -> tuple[str, str]:
-        return (self.tool_name, _canonical_json(self.tool_arguments))
+    def signature(self) -> ToolCallSignature:
+        return ToolCallSignature(
+            tool_name=self.tool_name,
+            arguments_json=_canonical_json(self.tool_arguments),
+        )
 
 
 def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionContext) -> str:
@@ -70,21 +85,24 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
     )
 
     for replacement in replacements:
-        matching_targets = targets_by_key.get(replacement.match_key(), [])
+        matching_targets = targets_by_key.get(replacement.signature(), [])
         if not matching_targets:
             raise ValueError(
                 f"no previous tool result matches {replacement.tool_name} "
                 f"with arguments {_canonical_json(replacement.tool_arguments)}"
             )
-        if len(matching_targets) > 1:
-            raise ValueError(
-                f"multiple previous tool results match {replacement.tool_name} "
-                f"with arguments {_canonical_json(replacement.tool_arguments)}"
-            )
 
     for replacement in replacements:
-        tool_message = targets_by_key[replacement.match_key()][0]
-        tool_message.compressions.append(replacement.replace_content)
+        matching_targets = targets_by_key[replacement.signature()]
+        uncompressed_targets = [
+            tool_message for tool_message in matching_targets if not tool_message.compressions
+        ]
+        if len(matching_targets) == 1:
+            matching_targets[0].compressions.append(replacement.replace_content)
+            continue
+
+        for tool_message in uncompressed_targets[:-1]:
+            tool_message.compressions.append(replacement.replace_content)
 
     return "Success"
 
@@ -95,7 +113,7 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
         raise ValueError('invalid arguments: "replacements" must be a non-empty list')
 
     replacements: list[Replacement] = []
-    seen_match_keys: set[tuple[str, str]] = set()
+    seen_signatures: set[ToolCallSignature] = set()
     for index, raw_replacement in enumerate(raw_replacements):
         if not isinstance(raw_replacement, dict):
             raise ValueError(f'invalid arguments: "replacements[{index}]" must be an object')
@@ -126,13 +144,13 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
             tool_arguments=tool_arguments,
             replace_content=replace_content,
         )
-        match_key = replacement.match_key()
-        if match_key in seen_match_keys:
+        signature = replacement.signature()
+        if signature in seen_signatures:
             raise ValueError(
                 f"duplicate tool_name/tool_arguments in replacements: "
                 f"{tool_name} {_canonical_json(tool_arguments)}"
             )
-        seen_match_keys.add(match_key)
+        seen_signatures.add(signature)
         replacements.append(replacement)
 
     return replacements
@@ -140,11 +158,11 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
 
 def _tool_message_targets_by_call_arguments(
     history: "MessageHistory",
-) -> dict[tuple[str, str], list[Any]]:
+) -> ToolMessageTargetsBySignature:
     from ..communication import AssistantMessage, ToolMessage
 
     tool_calls_by_id: dict[str, tuple[str, dict[str, Any]]] = {}
-    targets_by_key: dict[tuple[str, str], list[ToolMessage]] = {}
+    targets_by_key: ToolMessageTargetsBySignature = {}
     for message in history:
         if isinstance(message, AssistantMessage):
             for tool_call in message.tool_calls:
@@ -162,8 +180,11 @@ def _tool_message_targets_by_call_arguments(
                 f'missing assistant tool_call for ToolMessage.tool_call_id: "{message.tool_call_id}"'
             )
         tool_name, tool_arguments = tool_call
-        match_key = (tool_name, _canonical_json(tool_arguments))
-        targets_by_key.setdefault(match_key, []).append(message)
+        signature = ToolCallSignature(
+            tool_name=tool_name,
+            arguments_json=_canonical_json(tool_arguments),
+        )
+        targets_by_key.setdefault(signature, []).append(message)
 
     return targets_by_key
 

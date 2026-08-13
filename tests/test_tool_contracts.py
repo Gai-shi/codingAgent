@@ -184,7 +184,7 @@ class ToolContractsTest(unittest.TestCase):
         self.assertIn("duplicate tool_name/tool_arguments in replacements", duplicate_result)
         self.assertEqual(message_state.history[2].compressions, [])
 
-    def test_compress_tool_rejects_ambiguous_tool_argument_matches(self):
+    def test_compress_tool_compresses_earlier_duplicate_argument_matches(self):
         message_state = MessageState(
             history=[
                 SystemMessage(content="sys"),
@@ -213,6 +213,49 @@ class ToolContractsTest(unittest.TestCase):
             ToolExecutionContext(message_state=message_state),
         )
 
-        self.assertIn("multiple previous tool results match read_file", result)
-        self.assertEqual(message_state.history[2].compressions, [])
+        self.assertEqual(result, "Success")
+        self.assertEqual(message_state.history[2].compressions, ["short"])
         self.assertEqual(message_state.history[3].compressions, [])
+
+    def test_compress_tool_keeps_last_uncompressed_duplicate_match(self):
+        first_tool_message = ToolMessage(
+            tool_call_id="call-1",
+            content="first result",
+            compressions=["already short"],
+        )
+        second_tool_message = ToolMessage(tool_call_id="call-2", content="second result")
+        third_tool_message = ToolMessage(tool_call_id="call-3", content="third result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-2", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-3", name="read_file", arguments={"path": "same.txt"}),
+                    ],
+                ),
+                first_tool_message,
+                second_tool_message,
+                third_tool_message,
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "same.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(first_tool_message.compressions, ["already short"])
+        self.assertEqual(second_tool_message.compressions, ["short"])
+        self.assertEqual(third_tool_message.compressions, [])
