@@ -68,6 +68,7 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
     targets_by_key = _tool_message_targets_by_call_arguments(
         context.message_state.model_visible_history()
     )
+    pending_compressions: list[tuple["ToolMessage", str]] = []
 
     for replacement in replacements:
         matching_targets = targets_by_key.get(replacement.call_signature(), [])
@@ -77,17 +78,23 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
                 f"with arguments {_canonical_json(replacement.tool_arguments)}"
             )
 
-    for replacement in replacements:
         matching_targets = targets_by_key[replacement.call_signature()]
         uncompressed_targets = [
             tool_message for tool_message in matching_targets if not tool_message.compressions
         ]
         if len(matching_targets) == 1:
-            matching_targets[0].compressions.append(replacement.replace_content)
+            if uncompressed_targets:
+                pending_compressions.append((matching_targets[0], replacement.replace_content))
             continue
 
         for tool_message in uncompressed_targets[:-1]:
-            tool_message.compressions.append(replacement.replace_content)
+            pending_compressions.append((tool_message, replacement.replace_content))
+
+    if not pending_compressions:
+        return "No changes: all matching tool results are already compressed"
+
+    for tool_message, replace_content in pending_compressions:
+        tool_message.compressions.append(replace_content)
 
     return "Success"
 
