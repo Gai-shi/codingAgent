@@ -43,6 +43,14 @@ DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "logs" / "log.log"
 DEFAULT_SESSION_RECORD_PATH = APP_ROOT / ".ai_job" / "sessions" / "sessions.md"
 
 
+def enable_line_editing() -> None:
+    """Enable readline-backed input editing when the platform provides it."""
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        return
+
+
 def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ai-job 最小 coding agent CLI")
     parser.add_argument(
@@ -164,6 +172,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         compression_manager=compression_manager,
     )
     print_banner(app_env, tool_registry, workspace_root)
+    enable_line_editing()
 
     while True:
         try:
