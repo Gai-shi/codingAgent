@@ -5,7 +5,14 @@ import unittest
 from pathlib import Path
 
 from ai_job.agent import AgentRunner
-from ai_job.communication import AssistantMessage, SummaryMessage, SystemMessage, ToolMessage, UserMessage
+from ai_job.communication import (
+    AssistantMessage,
+    MessageState,
+    SummaryMessage,
+    SystemMessage,
+    ToolMessage,
+    UserMessage,
+)
 from ai_job.infra.logging import LogWrapper
 from ai_job.infra.session_recording import SessionRecorder
 from ai_job.provider_adapters import BaseChatModel
@@ -86,7 +93,7 @@ class AgentRunnerTest(unittest.TestCase):
         )
         history = [SystemMessage(content="sys"), UserMessage(content="please echo")]
 
-        result = runner.run_turn(history)
+        result = runner.run_turn(MessageState(history=history))
 
         self.assertEqual(result, "done")
         self.assertEqual(history[-3].tool_calls[0].name, "echo")
@@ -125,7 +132,9 @@ class AgentRunnerTest(unittest.TestCase):
             max_tool_rounds=3,
         )
 
-        runner.run_turn([SystemMessage(content="sys"), UserMessage(content="please read files")])
+        history = [SystemMessage(content="sys"), UserMessage(content="please read files")]
+
+        runner.run_turn(MessageState(history=history))
 
         log_text = LogWrapper.log_path().read_text(encoding="utf-8")
         self.assertIn(
@@ -145,7 +154,6 @@ class AgentRunnerTest(unittest.TestCase):
             tool_registry=registry,
             tool_executor=ToolExecutor(registry),
             max_tool_rounds=1,
-            context_start_index=3,
         )
         old_user_message = UserMessage(content="old user")
         history = [
@@ -155,7 +163,7 @@ class AgentRunnerTest(unittest.TestCase):
             UserMessage(content="active user"),
         ]
 
-        runner.run_turn(history)
+        runner.run_turn(MessageState(history=history, context_start_index=3))
 
         self.assertEqual(model.seen_histories[0][0], SystemMessage(content="sys"))
         self.assertNotIn(old_user_message, model.seen_histories[0])
@@ -182,7 +190,7 @@ class AgentRunnerTest(unittest.TestCase):
         )
         history = [SystemMessage(content="sys"), UserMessage(content="please echo")]
 
-        runner.run_turn(history)
+        runner.run_turn(MessageState(history=history))
 
         self.assertEqual(len(compression_manager.seen_histories), 2)
         self.assertEqual(
@@ -219,7 +227,7 @@ class AgentRunnerTest(unittest.TestCase):
             active_user_message,
         ]
 
-        runner.run_turn(history)
+        runner.run_turn(MessageState(history=history))
 
         self.assertEqual(
             model.seen_histories[0],
@@ -241,7 +249,7 @@ class AgentRunnerTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "最终响应缺少文本"):
-            runner.run_turn([UserMessage(content="hi")])
+            runner.run_turn(MessageState(history=[UserMessage(content="hi")]))
 
     def test_run_turn_stops_after_max_tool_rounds(self):
         registry = ToolRegistry([EchoTool()])
@@ -262,4 +270,4 @@ class AgentRunnerTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "工具调用轮数超过上限"):
-            runner.run_turn([UserMessage(content="hi")])
+            runner.run_turn(MessageState(history=[UserMessage(content="hi")]))

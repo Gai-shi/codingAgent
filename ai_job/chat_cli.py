@@ -22,6 +22,7 @@ from .agent import AgentRunner
 from .composition import create_compression_manager
 from .communication import (
     MessageHistory,
+    MessageState,
     SystemMessage,
     UserMessage,
     message_history_to_debug_dicts,
@@ -139,7 +140,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 2
 
-    messages = build_initial_messages(app_env, workspace_root)
+    message_state = MessageState(history=build_initial_messages(app_env, workspace_root))
+    messages = message_state.history
     SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
     tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
     tool_executor = ToolExecutor(tool_registry)
@@ -172,21 +174,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         if user_text.lower() in CONTEXT_COMMANDS:
-            print_context(messages)
+            print_context(message_state.history)
             continue
 
-        turn_start = len(messages)
-        messages.append(UserMessage(content=user_text))
+        turn_start = len(message_state.history)
+        message_state.history.append(UserMessage(content=user_text))
         SessionRecorder.record_session("UserMessage", user_text, "text")
         try:
             with SuppressInputEchoAndDiscard():
-                assistant_text = agent_runner.run_turn(messages)
+                assistant_text = agent_runner.run_turn(message_state)
         except KeyboardInterrupt:
-            del messages[turn_start:]
+            del message_state.history[turn_start:]
             print("\n已中断。")
             return 130
         except RuntimeError as exc:
-            del messages[turn_start:]
+            del message_state.history[turn_start:]
             print(f"错误：{exc}", file=sys.stderr)
             continue
 

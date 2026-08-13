@@ -25,7 +25,6 @@ class AgentRunner:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         max_tool_rounds: int,
-        context_start_index: int = 0,
         compression_manager: CompressionManager | None = None,
         message_visibility_manager: MessageVisibilityManager | None = None,
     ) -> None:
@@ -33,13 +32,12 @@ class AgentRunner:
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._max_tool_rounds = max_tool_rounds
-        self._message_state = MessageState(history=[], context_start_index=context_start_index)
         self._compression_manager = compression_manager
         self._message_visibility_manager = message_visibility_manager or MessageVisibilityManager()
 
-    def run_turn(self, history: MessageHistory) -> str:
+    def run_turn(self, message_state: MessageState) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
-        self._message_state.history = history
+        history = message_state.history
         for round_index in range(self._max_tool_rounds):
             round_number = round_index + 1
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
@@ -47,7 +45,7 @@ class AgentRunner:
             if self._compression_manager is not None:
                 self._compression_manager.compress_if_needed(history)
             assistant_message = self._chat_model.complete(
-                self._build_model_history(self._message_state),
+                self._build_model_history(message_state),
                 self._tool_registry,
             )
             history.append(assistant_message)
@@ -80,7 +78,7 @@ class AgentRunner:
                 SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), "json")
                 tool_content = self._tool_executor.execute(
                     tool_call,
-                    ToolExecutionContext(message_state=self._message_state),
+                    ToolExecutionContext(message_state=message_state),
                 )
                 tool_message_index = len(history)
                 history.append(
