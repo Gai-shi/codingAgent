@@ -51,6 +51,11 @@ def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="agent 读写代码的工作区目录。默认使用启动命令时的当前目录。",
     )
+    parser.add_argument(
+        "--disable-compress-tool",
+        action="store_true",
+        help="不注册 compress_tool，用于对比评测工具输出压缩的效果。",
+    )
     return parser.parse_args(argv)
 
 
@@ -143,7 +148,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     message_state = MessageState(history=build_initial_messages(app_env, workspace_root))
     messages = message_state.history
     SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
-    tool_registry = create_default_tool_registry(workspace_root, create_protected_grep_approval(workspace_root))
+    tool_registry = create_default_tool_registry(
+        workspace_root,
+        create_protected_grep_approval(workspace_root),
+        include_compress_tool=not args.disable_compress_tool,
+    )
     tool_executor = ToolExecutor(tool_registry)
     chat_model = OpenAIModel(app_env)
     compression_manager = create_compression_manager(app_env, chat_model)

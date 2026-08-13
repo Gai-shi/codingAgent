@@ -15,14 +15,14 @@ from .tool_registry import ToolRegistry
 def create_default_tool_registry(
     workspace_root: Path,
     request_protected_grep_approval: Optional[Callable[[Path], bool]] = None,
+    include_compress_tool: bool = True,
 ) -> ToolRegistry:
     tools = [
         ReadFileTool(workspace_root),
         GrepTool(workspace_root, request_protected_grep_approval),
         ApplyPatchTool(workspace_root),
-        CompressTool(),
     ]
+    if include_compress_tool:
+        tools.append(CompressTool())
 
-    return ToolRegistry(
-        tools
-    )
+    return ToolRegistry(tools)

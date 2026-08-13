@@ -186,3 +186,9 @@ class FileToolsTest(unittest.TestCase):
         self.assertIsInstance(registry.get("grep"), GrepTool)
         self.assertIsInstance(registry.get("apply_patch"), ApplyPatchTool)
         self.assertIsInstance(registry.get("compress_tool"), CompressTool)
+
+    def test_default_registry_can_disable_compress_tool(self):
+        registry = create_default_tool_registry(self.workspace_root, include_compress_tool=False)
+
+        self.assertEqual(registry.names(), ["read_file", "grep", "apply_patch"])
+        self.assertIsNone(registry.get("compress_tool"))

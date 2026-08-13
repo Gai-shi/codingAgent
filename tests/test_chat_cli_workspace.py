@@ -145,6 +145,40 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
         self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
 
+    def test_main_can_disable_compress_tool_registration(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "key",
+                    "OPENAI_MODEL": "model",
+                    "FILTER_TERMINAL_LOG_LEVEL": "none",
+                },
+                clear=True,
+            ):
+                with patch("ai_job.chat_cli.LogWrapper.configure"):
+                    with patch("ai_job.chat_cli.LogWrapper.cleanup_expired_logs_async"):
+                        with patch("ai_job.chat_cli.SessionRecorder.configure"):
+                            with patch("ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"):
+                                with patch("ai_job.chat_cli.SessionRecorder.record_session"):
+                                    with patch("ai_job.chat_cli.create_default_tool_registry") as registry_mock:
+                                        with patch("ai_job.chat_cli.ToolExecutor"):
+                                            with patch("ai_job.chat_cli.OpenAIModel"):
+                                                with patch("ai_job.chat_cli.create_compression_manager"):
+                                                    with patch("ai_job.chat_cli.AgentRunner"):
+                                                        with patch("builtins.input", side_effect=EOFError):
+                                                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                                                exit_code = main(
+                                                                    [
+                                                                        "--workspace",
+                                                                        tmp_dir,
+                                                                        "--disable-compress-tool",
+                                                                    ]
+                                                                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(registry_mock.call_args.kwargs["include_compress_tool"])
+
 
 if __name__ == "__main__":
     unittest.main()
