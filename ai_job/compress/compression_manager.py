@@ -53,8 +53,7 @@ class CompressionManager:
             token_counter=self._token_counter,
         )
         summary = self._summarizer(plan, history)
-        message_state.history[:] = self._compressed_history(history, plan, summary)
-        message_state.context_start_index = 1 if _has_system_message(message_state.history) else 0
+        self._compressed_history(message_state, plan, summary)
 
     def _active_context(self, message_state: MessageState) -> MessageHistory:
         history = message_state.history
@@ -68,16 +67,20 @@ class CompressionManager:
 
     @staticmethod
     def _compressed_history(
-        history: MessageHistory,
+        message_state: MessageState,
         plan: CompressionPlan,
         summary: SummaryMessage,
-    ) -> MessageHistory:
-        prefix = [history[0]] if history and isinstance(history[0], SystemMessage) else []
-        return [
-            *prefix,
-            summary,
-            *history[plan.keep_range.start : plan.keep_range.end],
-        ]
+    ) -> None:
+        history = message_state.history
+        summary_index = len(history)
+        recent_messages = history[plan.keep_range.start : plan.keep_range.end]
+        message_state.history.extend(
+            [
+                summary,
+                *recent_messages,
+            ]
+        )
+        message_state.context_start_index = summary_index
 
 
 def _has_system_message(history: MessageHistory) -> bool:
