@@ -214,7 +214,7 @@ class CompressionManagerTest(unittest.TestCase):
             ],
         )
 
-    def test_compress_if_needed_rewrites_history_in_place(self):
+    def test_compress_if_needed_appends_compressed_context_and_moves_context_start(self):
         original_history = [
             SystemMessage(content="sys"),
             UserMessage(content="old"),
@@ -242,10 +242,10 @@ class CompressionManagerTest(unittest.TestCase):
 
         manager.compress_if_needed(message_state)
 
-        self.assertIsInstance(history[0], SystemMessage)
-        self.assertEqual(history[1], summary)
-        self.assertEqual(history[2:], original_history[3:])
-        self.assertEqual(message_state.context_start_index, 1)
+        self.assertEqual(history[: len(original_history)], original_history)
+        self.assertEqual(history[len(original_history)], summary)
+        self.assertEqual(history[len(original_history) + 1 :], original_history[3:])
+        self.assertEqual(message_state.context_start_index, len(original_history))
         self.assertEqual(received[0][0].complete_range, MessageRange(1, 3))
         self.assertEqual(received[0][0].keep_range, MessageRange(3, 5))
         self.assertEqual(received[0][1], original_history)
