@@ -92,7 +92,7 @@ class AgentRunner:
                 tool_message_indexes.append(tool_message_index)
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
             self._message_visibility_manager.apply_after_tool_batch(
-                history,
+                message_state=message_state,
                 assistant_message_index=assistant_message_index,
                 tool_message_indexes=tool_message_indexes,
             )

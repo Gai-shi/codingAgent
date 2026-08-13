@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..communication import AssistantMessage, Message, MessageHistory, ToolMessage
+from ..communication import AssistantMessage, Message, MessageHistory, MessageState, ToolMessage
 
 
 COMPRESS_TOOL_NAME = "compress_tool"
@@ -13,11 +13,12 @@ class MessageVisibilityManager:
 
     def apply_after_tool_batch(
         self,
-        history: MessageHistory,
         *,
+        message_state: MessageState,
         assistant_message_index: int,
         tool_message_indexes: list[int],
     ) -> None:
+        history = message_state.history
         assistant_message = _get_message(history, assistant_message_index)
         if not isinstance(assistant_message, AssistantMessage):
             raise ValueError("assistant_message_index must point to an AssistantMessage")
@@ -31,7 +32,10 @@ class MessageVisibilityManager:
             tool_message_indexes=tool_message_indexes,
         )
         if self._all_tool_messages_succeeded(history, tool_message_indexes):
-            self._hide_compress_tool_messages(history, through_index=tool_message_indexes[-1])
+            self._hide_compress_tool_messages(
+                message_state,
+                through_index=tool_message_indexes[-1],
+            )
             return
 
         self._set_visible(history, assistant_message_index, True)
@@ -40,24 +44,23 @@ class MessageVisibilityManager:
 
     def _hide_compress_tool_messages(
         self,
-        history: MessageHistory,
+        message_state: MessageState,
         *,
         through_index: int,
     ) -> None:
-        for index, message in enumerate(history[: through_index + 1]):
-            if not _is_compress_tool_assistant(message):
+        history = message_state.history
+        pending_tool_call_ids: set[str] = set()
+        for index in range(message_state.context_start_index, through_index + 1):
+            message = history[index]
+
+            if _is_compress_tool_assistant(message):
+                self._set_visible(history, index, False)
+                pending_tool_call_ids.update(tool_call.id for tool_call in message.tool_calls)
                 continue
 
-            self._set_visible(history, index, False)
-            for tool_call in message.tool_calls:
-                tool_message_index = _find_tool_message_index(
-                    history,
-                    tool_call_id=tool_call.id,
-                    start_index=index + 1,
-                    end_index=through_index,
-                )
-                if tool_message_index is not None:
-                    self._set_visible(history, tool_message_index, False)
+            if isinstance(message, ToolMessage) and message.tool_call_id in pending_tool_call_ids:
+                self._set_visible(history, index, False)
+                pending_tool_call_ids.remove(message.tool_call_id)
 
     def _validate_compress_tool_batch(
         self,
@@ -112,17 +115,3 @@ def _is_compress_tool_assistant(message: Message) -> bool:
         and bool(message.tool_calls)
         and all(tool_call.name == COMPRESS_TOOL_NAME for tool_call in message.tool_calls)
     )
-
-
-def _find_tool_message_index(
-    history: MessageHistory,
-    *,
-    tool_call_id: str,
-    start_index: int,
-    end_index: int,
-) -> int | None:
-    for index in range(start_index, end_index + 1):
-        message = history[index]
-        if isinstance(message, ToolMessage) and message.tool_call_id == tool_call_id:
-            return index
-    return None

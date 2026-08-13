@@ -293,6 +293,53 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertNotIn(history[5], model.seen_histories[1])
         self.assertNotIn(history[6], model.seen_histories[1])
 
+    def test_run_turn_hides_compress_tool_messages_only_from_context_start_index(self):
+        registry = ToolRegistry([CompressTool()])
+        old_compress_call = ToolCall(
+            id="old-compress",
+            name="compress_tool",
+            arguments={"replacements": [{"tool_call_id": "old-tool", "replace_content": "old short"}]},
+        )
+        model = ScriptedChatModel(
+            [
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            id="new-compress",
+                            name="compress_tool",
+                            arguments={
+                                "replacements": [
+                                    {"tool_call_id": "active-tool", "replace_content": "active short"}
+                                ]
+                            },
+                        )
+                    ],
+                ),
+                AssistantMessage(content="done"),
+            ]
+        )
+        runner = AgentRunner(
+            chat_model=model,
+            tool_registry=registry,
+            tool_executor=ToolExecutor(registry),
+            max_tool_rounds=2,
+        )
+        history = [
+            SystemMessage(content="sys"),
+            AssistantMessage(content=None, tool_calls=[old_compress_call]),
+            ToolMessage(tool_call_id="old-compress", content="Success"),
+            ToolMessage(tool_call_id="active-tool", content="large active"),
+        ]
+
+        result = runner.run_turn(MessageState(history=history, context_start_index=3))
+
+        self.assertEqual(result, "done")
+        self.assertTrue(history[1].visible_to_model)
+        self.assertTrue(history[2].visible_to_model)
+        self.assertFalse(history[4].visible_to_model)
+        self.assertFalse(history[5].visible_to_model)
+
     def test_run_turn_uses_compressed_history_for_model_request(self):
         registry = ToolRegistry([])
         model = ScriptedChatModel([AssistantMessage(content="done")])
