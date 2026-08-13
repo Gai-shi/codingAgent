@@ -56,6 +56,14 @@ Message = Union[SystemMessage, UserMessage, SummaryMessage, AssistantMessage, To
 MessageHistory = list[Message]
 
 
+@dataclass
+class MessageState:
+    """Mutable conversation state shared by agent loop and tools."""
+
+    history: MessageHistory
+    context_start_index: int = 0
+
+
 def tool_message_visible_content(message: ToolMessage) -> str:
     """Return the ToolMessage content that should enter model context."""
     if message.compressions:

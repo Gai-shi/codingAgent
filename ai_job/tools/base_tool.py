@@ -6,12 +6,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..communication import MessageHistory
+    from ..communication import MessageHistory, MessageState
 
 
 @dataclass
 class ToolExecutionContext:
-    message_history: MessageHistory
+    message_state: MessageState
+
+    @property
+    def message_history(self) -> MessageHistory:
+        return self.message_state.history
 
 
 class BaseTool:

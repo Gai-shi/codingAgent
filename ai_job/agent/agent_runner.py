@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from ..compress import CompressionManager
-from ..communication import MessageHistory, SystemMessage, ToolMessage
+from ..communication import MessageHistory, MessageState, SystemMessage, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
@@ -33,19 +33,23 @@ class AgentRunner:
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._max_tool_rounds = max_tool_rounds
-        self._context_start_index = context_start_index
+        self._message_state = MessageState(history=[], context_start_index=context_start_index)
         self._compression_manager = compression_manager
         self._message_visibility_manager = message_visibility_manager or MessageVisibilityManager()
 
     def run_turn(self, history: MessageHistory) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
+        self._message_state.history = history
         for round_index in range(self._max_tool_rounds):
             round_number = round_index + 1
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
             if self._compression_manager is not None:
                 self._compression_manager.compress_if_needed(history)
-            assistant_message = self._chat_model.complete(self._build_model_history(history), self._tool_registry)
+            assistant_message = self._chat_model.complete(
+                self._build_model_history(self._message_state),
+                self._tool_registry,
+            )
             history.append(assistant_message)
             SessionRecorder.record_session(
                 "AssistantMessage",
@@ -76,7 +80,7 @@ class AgentRunner:
                 SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), "json")
                 tool_content = self._tool_executor.execute(
                     tool_call,
-                    ToolExecutionContext(message_history=history),
+                    ToolExecutionContext(message_state=self._message_state),
                 )
                 tool_message_index = len(history)
                 history.append(
@@ -96,12 +100,13 @@ class AgentRunner:
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
 
-    def _build_model_history(self, history: MessageHistory) -> MessageHistory:
+    def _build_model_history(self, message_state: MessageState) -> MessageHistory:
+        history = message_state.history
         if not history:
             return []
 
-        active_messages = history[self._context_start_index :]
-        if self._context_start_index > 0 and isinstance(history[0], SystemMessage):
+        active_messages = history[message_state.context_start_index :]
+        if message_state.context_start_index > 0 and isinstance(history[0], SystemMessage):
             return self._visible_messages([history[0], *active_messages])
         return self._visible_messages(active_messages)
 
