@@ -94,7 +94,7 @@ abcdefghijklmnopqrstuvwxyz
 ## 10:00:03 ToolCall compress_tool
 
 ```json
-{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_call_id": "call-read", "replace_content": "abc"}]}}
+{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_name": "read_file", "tool_arguments": {"path": "evidence/noisy_audit_log.txt"}, "replace_content": "abc"}]}}
 ```
 
 ## 10:00:04 ToolResult compress_tool
@@ -185,13 +185,13 @@ abcdefghijklmnopqrstuvwxyz
 ## 10:00:03 ToolCall compress_tool
 
 ```json
-{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_call_id": "missing", "replace_content": "abc"}]}}
+{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_name": "read_file", "tool_arguments": {"path": "missing.txt"}, "replace_content": "abc"}]}}
 ```
 
 ## 10:00:04 ToolResult compress_tool
 
 ```text
-Error: unknown tool_call_id: "missing"
+Error: no previous tool result matches read_file with arguments {"path":"missing.txt"}
 ```
 """,
                 encoding="utf-8",
@@ -202,7 +202,10 @@ Error: unknown tool_call_id: "missing"
 
         self.assertEqual(diagnostics["compress_tool_success_count"], 0)
         self.assertEqual(diagnostics["compress_tool_error_count"], 1)
-        self.assertEqual(diagnostics["compress_tool_errors"], ['Error: unknown tool_call_id: "missing"'])
+        self.assertEqual(
+            diagnostics["compress_tool_errors"],
+            ['Error: no previous tool result matches read_file with arguments {"path":"missing.txt"}'],
+        )
         self.assertEqual(diagnostics["compress_replacement_chars"], 3)
         self.assertEqual(diagnostics["successful_compress_replacement_chars"], 0)
         self.assertEqual(diagnostics["estimated_tool_context_chars_saved"], 0)

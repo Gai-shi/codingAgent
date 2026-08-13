@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ai_job.communication import MessageState, SystemMessage, ToolMessage, UserMessage
+from ai_job.communication import AssistantMessage, MessageState, SystemMessage, ToolMessage, UserMessage
 from ai_job.tools import BaseTool, CompressTool, ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
 
 
@@ -76,18 +76,31 @@ class ToolContractsTest(unittest.TestCase):
         message_state = MessageState(
             history=[
                 SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "old.txt"})
+                    ],
+                ),
                 old_tool_message,
                 UserMessage(content="active"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "active.txt"})
+                    ],
+                ),
                 active_tool_message,
             ],
-            context_start_index=2,
+            context_start_index=3,
         )
 
         result = CompressTool().execute(
             {
                 "replacements": [
                     {
-                        "tool_call_id": "call-1",
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "active.txt"},
                         "replace_content": "compressed active result",
                     }
                 ]
@@ -101,7 +114,15 @@ class ToolContractsTest(unittest.TestCase):
 
     def test_compress_tool_requires_context_and_valid_replacements(self):
         result_without_context = CompressTool().execute(
-            {"replacements": [{"tool_call_id": "call-1", "replace_content": "short"}]}
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            }
         )
         result_without_replacements = CompressTool().execute(
             {},
@@ -114,29 +135,84 @@ class ToolContractsTest(unittest.TestCase):
         )
         self.assertIn('"replacements" must be a non-empty list', result_without_replacements)
 
-    def test_compress_tool_rejects_unknown_and_duplicate_tool_call_ids(self):
+    def test_compress_tool_rejects_unknown_and_duplicate_tool_arguments(self):
         message_state = MessageState(
             history=[
                 SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "known.txt"})
+                    ],
+                ),
                 ToolMessage(tool_call_id="call-1", content="old result"),
             ]
         )
         context = ToolExecutionContext(message_state=message_state)
 
         unknown_result = CompressTool().execute(
-            {"replacements": [{"tool_call_id": "missing", "replace_content": "short"}]},
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "missing.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
             context,
         )
         duplicate_result = CompressTool().execute(
             {
                 "replacements": [
-                    {"tool_call_id": "call-1", "replace_content": "short 1"},
-                    {"tool_call_id": "call-1", "replace_content": "short 2"},
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short 1",
+                    },
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short 2",
+                    },
                 ]
             },
             context,
         )
 
-        self.assertIn('unknown tool_call_id: "missing"', unknown_result)
-        self.assertIn('duplicate tool_call_id in replacements: "call-1"', duplicate_result)
-        self.assertEqual(message_state.history[1].compressions, [])
+        self.assertIn("no previous tool result matches read_file", unknown_result)
+        self.assertIn("duplicate tool_name/tool_arguments in replacements", duplicate_result)
+        self.assertEqual(message_state.history[2].compressions, [])
+
+    def test_compress_tool_rejects_ambiguous_tool_argument_matches(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-2", name="read_file", arguments={"path": "same.txt"}),
+                    ],
+                ),
+                ToolMessage(tool_call_id="call-1", content="first result"),
+                ToolMessage(tool_call_id="call-2", content="second result"),
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "same.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertIn("multiple previous tool results match read_file", result)
+        self.assertEqual(message_state.history[2].compressions, [])
+        self.assertEqual(message_state.history[3].compressions, [])

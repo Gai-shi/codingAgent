@@ -160,7 +160,10 @@ def collect_run_diagnostics(stdout: str, stderr: str) -> dict[str, object]:
     session_text = _read_text_if_present(session_record)
     sections = list(_iter_session_sections(session_text))
     read_file_chars = _tool_result_text_chars(sections, "read_file")
-    read_file_chars_by_id = _tool_result_chars_by_call_id(sections, tool_name="read_file")
+    read_file_chars_by_signature = _tool_result_chars_by_call_signature(
+        sections,
+        tool_name="read_file",
+    )
     compress_stats = _compress_replacement_stats(sections)
     return {
         "log_file": log_file,
@@ -179,7 +182,10 @@ def collect_run_diagnostics(stdout: str, stderr: str) -> dict[str, object]:
         "compress_tool_errors": compress_stats["errors"],
         "tool_error_count": len(re.findall(r"\nError: ", session_text)),
         "read_file_tool_result_chars": read_file_chars,
-        "largest_read_file_tool_result_chars": max(read_file_chars_by_id.values(), default=0),
+        "largest_read_file_tool_result_chars": max(
+            (max(chars) for chars in read_file_chars_by_signature.values()),
+            default=0,
+        ),
         "compress_replacement_chars": compress_stats["attempted_replacement_chars"],
         "successful_compress_replacement_chars": compress_stats["successful_replacement_chars"],
         "estimated_tool_context_chars_saved": compress_stats["estimated_tool_context_chars_saved"],
@@ -314,12 +320,12 @@ def _tool_result_text_chars(sections: Sequence[SessionSection], tool_name: str) 
     return sum(len(section.content) for section in sections if section.title == title and section.language == "text")
 
 
-def _tool_result_chars_by_call_id(
+def _tool_result_chars_by_call_signature(
     sections: Sequence[SessionSection],
     *,
     tool_name: str | None = None,
-) -> dict[str, int]:
-    chars_by_id: dict[str, int] = {}
+) -> dict[tuple[str, str], list[int]]:
+    chars_by_signature: dict[tuple[str, str], list[int]] = {}
     pending_tool_call: tuple[str, str] | None = None
     for section in sections:
         if section.title.startswith("ToolCall ") and section.language == "json":
@@ -327,10 +333,10 @@ def _tool_result_chars_by_call_id(
             if parsed is None:
                 pending_tool_call = None
                 continue
-            raw_id = parsed.get("id")
             raw_name = parsed.get("name")
-            if isinstance(raw_id, str) and isinstance(raw_name, str):
-                pending_tool_call = (raw_id, raw_name)
+            raw_arguments = parsed.get("arguments")
+            if isinstance(raw_name, str) and isinstance(raw_arguments, dict):
+                pending_tool_call = (raw_name, _canonical_json(raw_arguments))
             else:
                 pending_tool_call = None
             continue
@@ -340,29 +346,30 @@ def _tool_result_chars_by_call_id(
         if pending_tool_call is None:
             continue
 
-        pending_id, pending_name = pending_tool_call
+        pending_name, pending_arguments_json = pending_tool_call
         result_name = section.title.removeprefix("ToolResult ")
         if pending_name == result_name and (tool_name is None or pending_name == tool_name):
-            chars_by_id[pending_id] = len(section.content)
+            signature = (pending_name, pending_arguments_json)
+            chars_by_signature.setdefault(signature, []).append(len(section.content))
         pending_tool_call = None
 
-    return chars_by_id
+    return chars_by_signature
 
 
 def _compress_replacement_stats(sections: Sequence[SessionSection]) -> dict[str, object]:
-    all_tool_result_chars_by_id = _tool_result_chars_by_call_id(sections)
+    all_tool_result_chars_by_signature = _tool_result_chars_by_call_signature(sections)
     attempted_replacement_chars = 0
     successful_replacement_chars = 0
     estimated_saved_chars = 0
     success_count = 0
     errors: list[str] = []
-    pending_replacements: list[tuple[str, str]] = []
+    pending_replacements: list[tuple[str, str, str]] = []
 
     for section in sections:
         if section.title == "ToolCall compress_tool" and section.language == "json":
             pending_replacements = _compress_replacements_from_section(section)
             attempted_replacement_chars += sum(
-                len(replace_content) for _, replace_content in pending_replacements
+                len(replace_content) for _, _, replace_content in pending_replacements
             )
             continue
 
@@ -372,11 +379,14 @@ def _compress_replacement_stats(sections: Sequence[SessionSection]) -> dict[str,
         result_text = section.content.strip()
         if result_text == "Success":
             success_count += 1
-            for tool_call_id, replace_content in pending_replacements:
+            for tool_name, tool_arguments_json, replace_content in pending_replacements:
                 successful_replacement_chars += len(replace_content)
-                original_chars = all_tool_result_chars_by_id.get(tool_call_id)
-                if original_chars is not None:
-                    estimated_saved_chars += max(0, original_chars - len(replace_content))
+                original_chars = all_tool_result_chars_by_signature.get(
+                    (tool_name, tool_arguments_json),
+                    [],
+                )
+                if len(original_chars) == 1:
+                    estimated_saved_chars += max(0, original_chars[0] - len(replace_content))
         elif result_text.startswith("Error:"):
             errors.append(result_text)
         pending_replacements = []
@@ -391,7 +401,7 @@ def _compress_replacement_stats(sections: Sequence[SessionSection]) -> dict[str,
     }
 
 
-def _compress_replacements_from_section(section: SessionSection) -> list[tuple[str, str]]:
+def _compress_replacements_from_section(section: SessionSection) -> list[tuple[str, str, str]]:
     data = _parse_json_section(section)
     if data is None:
         return []
@@ -402,15 +412,24 @@ def _compress_replacements_from_section(section: SessionSection) -> list[tuple[s
     if not isinstance(raw_replacements, list):
         return []
 
-    replacements: list[tuple[str, str]] = []
+    replacements: list[tuple[str, str, str]] = []
     for raw_replacement in raw_replacements:
         if not isinstance(raw_replacement, dict):
             continue
-        tool_call_id = raw_replacement.get("tool_call_id")
+        tool_name = raw_replacement.get("tool_name")
+        tool_arguments = raw_replacement.get("tool_arguments")
         replace_content = raw_replacement.get("replace_content")
-        if isinstance(tool_call_id, str) and isinstance(replace_content, str):
-            replacements.append((tool_call_id, replace_content))
+        if (
+            isinstance(tool_name, str)
+            and isinstance(tool_arguments, dict)
+            and isinstance(replace_content, str)
+        ):
+            replacements.append((tool_name, _canonical_json(tool_arguments), replace_content))
     return replacements
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _parse_json_section(section: SessionSection) -> dict[str, object] | None:

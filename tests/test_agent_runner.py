@@ -211,7 +211,11 @@ class AgentRunnerTest(unittest.TestCase):
                             name="compress_tool",
                             arguments={
                                 "replacements": [
-                                    {"tool_call_id": "call-old", "replace_content": "short"}
+                                    {
+                                        "tool_name": "read_file",
+                                        "tool_arguments": {"path": "old.txt"},
+                                        "replace_content": "short",
+                                    }
                                 ]
                             },
                         ),
@@ -229,6 +233,10 @@ class AgentRunnerTest(unittest.TestCase):
         history = [
             SystemMessage(content="sys"),
             UserMessage(content="please work"),
+            AssistantMessage(
+                content=None,
+                tool_calls=[ToolCall(id="call-old", name="read_file", arguments={"path": "old.txt"})],
+            ),
             ToolMessage(tool_call_id="call-old", content="large result"),
         ]
         original_history = list(history)
@@ -250,7 +258,11 @@ class AgentRunnerTest(unittest.TestCase):
                             name="compress_tool",
                             arguments={
                                 "replacements": [
-                                    {"tool_call_id": "call-old-1", "replace_content": "short 1"}
+                                    {
+                                        "tool_name": "read_file",
+                                        "tool_arguments": {"path": "large-1.txt"},
+                                        "replace_content": "short 1",
+                                    }
                                 ]
                             },
                         ),
@@ -259,7 +271,11 @@ class AgentRunnerTest(unittest.TestCase):
                             name="compress_tool",
                             arguments={
                                 "replacements": [
-                                    {"tool_call_id": "call-old-2", "replace_content": "short 2"}
+                                    {
+                                        "tool_name": "read_file",
+                                        "tool_arguments": {"path": "large-2.txt"},
+                                        "replace_content": "short 2",
+                                    }
                                 ]
                             },
                         ),
@@ -277,6 +293,13 @@ class AgentRunnerTest(unittest.TestCase):
         history = [
             SystemMessage(content="sys"),
             UserMessage(content="please compress"),
+            AssistantMessage(
+                content=None,
+                tool_calls=[
+                    ToolCall(id="call-old-1", name="read_file", arguments={"path": "large-1.txt"}),
+                    ToolCall(id="call-old-2", name="read_file", arguments={"path": "large-2.txt"}),
+                ],
+            ),
             ToolMessage(tool_call_id="call-old-1", content="large 1"),
             ToolMessage(tool_call_id="call-old-2", content="large 2"),
         ]
@@ -284,21 +307,29 @@ class AgentRunnerTest(unittest.TestCase):
         result = runner.run_turn(MessageState(history=history, context_start_index=1))
 
         self.assertEqual(result, "done")
-        self.assertEqual(history[2].compressions, ["short 1"])
-        self.assertEqual(history[3].compressions, ["short 2"])
-        self.assertFalse(history[4].visible_to_model)
+        self.assertEqual(history[3].compressions, ["short 1"])
+        self.assertEqual(history[4].compressions, ["short 2"])
         self.assertFalse(history[5].visible_to_model)
         self.assertFalse(history[6].visible_to_model)
-        self.assertNotIn(history[4], model.seen_histories[1])
+        self.assertFalse(history[7].visible_to_model)
         self.assertNotIn(history[5], model.seen_histories[1])
         self.assertNotIn(history[6], model.seen_histories[1])
+        self.assertNotIn(history[7], model.seen_histories[1])
 
     def test_run_turn_hides_compress_tool_messages_only_from_context_start_index(self):
         registry = ToolRegistry([CompressTool()])
         old_compress_call = ToolCall(
             id="old-compress",
             name="compress_tool",
-            arguments={"replacements": [{"tool_call_id": "old-tool", "replace_content": "old short"}]},
+            arguments={
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "old.txt"},
+                        "replace_content": "old short",
+                    }
+                ]
+            },
         )
         model = ScriptedChatModel(
             [
@@ -310,7 +341,11 @@ class AgentRunnerTest(unittest.TestCase):
                             name="compress_tool",
                             arguments={
                                 "replacements": [
-                                    {"tool_call_id": "active-tool", "replace_content": "active short"}
+                                    {
+                                        "tool_name": "read_file",
+                                        "tool_arguments": {"path": "active.txt"},
+                                        "replace_content": "active short",
+                                    }
                                 ]
                             },
                         )
@@ -329,6 +364,12 @@ class AgentRunnerTest(unittest.TestCase):
             SystemMessage(content="sys"),
             AssistantMessage(content=None, tool_calls=[old_compress_call]),
             ToolMessage(tool_call_id="old-compress", content="Success"),
+            AssistantMessage(
+                content=None,
+                tool_calls=[
+                    ToolCall(id="active-tool", name="read_file", arguments={"path": "active.txt"})
+                ],
+            ),
             ToolMessage(tool_call_id="active-tool", content="large active"),
         ]
 
@@ -337,8 +378,9 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(result, "done")
         self.assertTrue(history[1].visible_to_model)
         self.assertTrue(history[2].visible_to_model)
-        self.assertFalse(history[4].visible_to_model)
+        self.assertEqual(history[4].compressions, ["active short"])
         self.assertFalse(history[5].visible_to_model)
+        self.assertFalse(history[6].visible_to_model)
 
     def test_run_turn_uses_compressed_history_for_model_request(self):
         registry = ToolRegistry([])
