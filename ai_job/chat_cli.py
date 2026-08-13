@@ -123,6 +123,28 @@ def print_context(messages: MessageHistory) -> None:
     print()
 
 
+def record_message_state_snapshot(message_state: MessageState) -> None:
+    SessionRecorder.record_session(
+        "MessageState raw",
+        {
+            "context_start_index": message_state.context_start_index,
+            "history": message_history_to_debug_dicts(message_state.history),
+        },
+        "json",
+    )
+    SessionRecorder.record_session(
+        "MessageState model_visible",
+        {
+            "context_start_index": message_state.context_start_index,
+            "history": message_history_to_debug_dicts(
+                message_state.model_visible_history(),
+                use_model_visible_content=True,
+            ),
+        },
+        "json",
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         args = parse_cli_args(argv)
@@ -178,6 +200,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             user_text = input("你> ").strip()
         except EOFError:
+            record_message_state_snapshot(message_state)
             print("\n再见。")
             return 0
         except KeyboardInterrupt:
@@ -188,6 +211,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
 
         if user_text.lower() in EXIT_COMMANDS:
+            record_message_state_snapshot(message_state)
             print("再见。")
             return 0
 

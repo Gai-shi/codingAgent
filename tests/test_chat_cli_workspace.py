@@ -15,9 +15,10 @@ from ai_job.chat_cli import (
     default_trace_log_path,
     main,
     print_context,
+    record_message_state_snapshot,
     resolve_workspace_root,
 )
-from ai_job.communication import AssistantMessage, MessageState, SystemMessage, UserMessage
+from ai_job.communication import AssistantMessage, MessageState, SystemMessage, ToolMessage, UserMessage
 from ai_job.infra.env import AppEnv
 
 
@@ -92,6 +93,32 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertNotIn("old", text)
         self.assertNotIn("hidden", text)
 
+    def test_record_message_state_snapshot_writes_raw_and_model_visible_history(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                ToolMessage(
+                    tool_call_id="call-1",
+                    content="raw tool output",
+                    compressions=["compressed tool output"],
+                ),
+            ]
+        )
+
+        with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_mock:
+            record_message_state_snapshot(message_state)
+
+        self.assertEqual(record_mock.call_count, 2)
+        raw_call = record_mock.call_args_list[0]
+        visible_call = record_mock.call_args_list[1]
+        self.assertEqual(raw_call.args[0], "MessageState raw")
+        self.assertEqual(visible_call.args[0], "MessageState model_visible")
+        self.assertEqual(raw_call.args[1]["history"][1]["content"], "raw tool output")
+        self.assertEqual(
+            visible_call.args[1]["history"][1]["content"],
+            "compressed tool output",
+        )
+
     def test_trace_log_path_lives_under_ai_job_project_root(self):
         self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
@@ -139,9 +166,11 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             str(Path(tmp_dir).resolve()),
         )
         session_cleanup_mock.assert_called_once_with()
-        record_session_mock.assert_called_once()
-        self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
-        self.assertEqual(record_session_mock.call_args.args[2], "text")
+        self.assertEqual(record_session_mock.call_count, 3)
+        self.assertEqual(record_session_mock.call_args_list[0].args[0], "SystemMessage")
+        self.assertEqual(record_session_mock.call_args_list[0].args[2], "text")
+        self.assertEqual(record_session_mock.call_args_list[1].args[0], "MessageState raw")
+        self.assertEqual(record_session_mock.call_args_list[2].args[0], "MessageState model_visible")
         self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
         self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
 
