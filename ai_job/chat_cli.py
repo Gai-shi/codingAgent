@@ -3,7 +3,7 @@
 当前文件只负责：
 - 从项目级 .env 和环境变量读取配置；
 - 通过 composition 创建 CLI 运行时对象；
-- 维护当前进程内存里的消息历史；
+- 编排当前进程内存里的消息历史；
 - 处理终端输入输出。
 
 agent loop、provider 请求解析、tool calling 协议转换均已拆到独立模块。
@@ -14,14 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from .composition import create_cli_runtime
+from .composition import CliSessionLifecycle, create_cli_runtime
 from .communication import (
     MessageHistory,
-    MessageState,
     UserMessage,
     message_history_to_debug_dicts,
 )
@@ -115,50 +113,16 @@ def print_context(messages: MessageHistory) -> None:
     print()
 
 
-def record_message_state_snapshot(message_state: MessageState) -> None:
-    SessionRecorder.record_session(
-        "MessageState raw",
-        {
-            "context_start_index": message_state.context_start_index,
-            "history": message_history_to_debug_dicts(message_state.history),
-        },
-        "json",
-    )
-    SessionRecorder.record_session(
-        "MessageState model_visible",
-        {
-            "context_start_index": message_state.context_start_index,
-            "history": message_history_to_debug_dicts(
-                message_state.model_visible_history(),
-                use_model_visible_content=True,
-            ),
-        },
-        "json",
-    )
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         args = parse_cli_args(argv)
         workspace_root = resolve_workspace_root(args.workspace)
         app_env = EnvLoader.load(DEFAULT_ENV_FILE_PATH)
-        session_started_at = datetime.now()
-        LogWrapper.configure(
-            log_path=default_trace_log_path(),
-            filter_terminal_log_level=app_env.filter_terminal_log_level,
-            session_started_at=session_started_at,
+        session_lifecycle = CliSessionLifecycle(
+            trace_log_path=default_trace_log_path(),
+            session_record_path=default_session_record_path(),
         )
-        SessionRecorder.configure(
-            session_path=default_session_record_path(),
-            session_started_at=session_started_at,
-            metadata={
-                "workspace": str(workspace_root),
-                "model": app_env.openai_model,
-                "base_url": app_env.openai_base_url,
-            },
-        )
-        LogWrapper.cleanup_expired_logs_async()
-        SessionRecorder.cleanup_expired_session_records_async()
+        session_lifecycle.start(app_env=app_env, workspace_root=workspace_root)
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
@@ -175,8 +139,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     message_state = runtime.message_state
     agent_runner = runtime.agent_runner
-    messages = message_state.history
-    SessionRecorder.record_session("SystemMessage", messages[0].content, "text")
+    session_lifecycle.record_initial_system_message(message_state)
     print_banner(app_env, runtime.tool_registry, workspace_root)
     enable_line_editing()
 
@@ -184,7 +147,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             user_text = input("你> ").strip()
         except EOFError:
-            record_message_state_snapshot(message_state)
+            session_lifecycle.record_exit_snapshot(message_state)
             print("\n再见。")
             return 0
         except KeyboardInterrupt:
@@ -195,7 +158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             continue
 
         if user_text.lower() in EXIT_COMMANDS:
-            record_message_state_snapshot(message_state)
+            session_lifecycle.record_exit_snapshot(message_state)
             print("再见。")
             return 0
 

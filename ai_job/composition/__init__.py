@@ -7,8 +7,10 @@ from .compression_factory import (
     create_summarizer,
     parse_summary_message,
 )
+from .session_lifecycle import CliSessionLifecycle
 
 __all__ = [
+    "CliSessionLifecycle",
     "CliRuntime",
     "build_initial_messages",
     "build_summary_messages",
