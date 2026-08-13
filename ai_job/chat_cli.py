@@ -99,7 +99,7 @@ def print_banner(app_env: AppEnv, tool_registry: ToolRegistry, workspace_root: P
     print(f"session_record: {SessionRecorder.session_path()}")
     print(f"terminal_log_level: {LogWrapper.filter_terminal_log_level()}")
     print(f"tools: {', '.join(tool_registry.names())}")
-    print("输入 /context 查看当前内存里的 messages。")
+    print("输入 /context 查看当前模型上下文。")
     print("输入 exit / quit / et / Ctrl-D 退出。")
     print()
 
@@ -174,7 +174,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         if user_text.lower() in CONTEXT_COMMANDS:
-            print_context(message_state.history)
+            print_context(message_state.model_visible_history())
             continue
 
         turn_start = len(message_state.history)

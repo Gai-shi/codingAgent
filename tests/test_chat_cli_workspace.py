@@ -14,8 +14,10 @@ from ai_job.chat_cli import (
     default_session_record_path,
     default_trace_log_path,
     main,
+    print_context,
     resolve_workspace_root,
 )
+from ai_job.communication import AssistantMessage, MessageState, SystemMessage, UserMessage
 from ai_job.infra.env import AppEnv
 
 
@@ -68,6 +70,27 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("system prompt", messages[0].content)
         self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
+
+    def test_context_output_uses_model_visible_history(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                UserMessage(content="old"),
+                UserMessage(content="active"),
+                AssistantMessage(content="hidden", visible_to_model=False),
+            ],
+            context_start_index=2,
+        )
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_context(message_state.model_visible_history())
+
+        text = output.getvalue()
+        self.assertIn("sys", text)
+        self.assertIn("active", text)
+        self.assertNotIn("old", text)
+        self.assertNotIn("hidden", text)
 
     def test_trace_log_path_lives_under_ai_job_project_root(self):
         self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
