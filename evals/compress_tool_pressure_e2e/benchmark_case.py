@@ -272,14 +272,14 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
 
 请从 evidence/00_index.txt 开始，只读取索引要求的默认 release 交接包。
 本轮不要跟进 post-lock route，不要读取 errata 或其他 evidence 文件。
-本轮不要修改文件，不要运行测试；读完只回复“默认包调研完成”，不要粘贴证据内容。""",
+本轮不要修改文件，不要运行测试；读完后只给简短调研结论，说明默认包是否仍需后续 route 校验，不要粘贴长证据内容。""",
         ),
         PromptTurn(
             kind="errata_research",
             text="""刚才的默认交接包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
 
 请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效最终契约依据。
-本轮不要修改文件，不要运行测试；读完只回复“纠偏调研完成”，不要粘贴证据内容。""",
+本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认包事实已作废、后续实现只应保留哪些最终依据，不要粘贴长证据内容。""",
         ),
         PromptTurn(
             kind="implementation",
@@ -303,14 +303,14 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
 
 请从 evidence/00_index.txt 开始，只读取索引要求的默认 incident triage 包。
 本轮不要跟进 post-lock route，不要读取 errata 或其他 evidence 文件。
-本轮不要修改文件，不要运行测试；读完只回复“默认包调研完成”，不要粘贴证据内容。""",
+本轮不要修改文件，不要运行测试；读完后只给简短调研结论，说明默认包是否仍需后续 route 校验，不要粘贴长证据内容。""",
         ),
         PromptTurn(
             kind="trace_errata_research",
             text="""刚才的默认 triage 包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
 
 请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效 active trace 依据。
-本轮不要修改文件，不要运行测试；读完只回复“纠偏调研完成”，不要粘贴证据内容。""",
+本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认 triage 事实已作废、后续实现只应保留哪些 active 依据，不要粘贴长证据内容。""",
         ),
         PromptTurn(
             kind="debug_fix",
