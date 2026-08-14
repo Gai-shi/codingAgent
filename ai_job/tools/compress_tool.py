@@ -9,6 +9,12 @@ from typing import Any
 from .base_tool import BaseTool, ToolExecutionContext
 
 
+MAX_COMPRESSIONS_PER_TOOL_MESSAGE = 2
+MAX_COMPRESSION_MESSAGE = (
+    "No changes: each tool result can be compressed at most 2 times. "
+    "Continue with the task instead of calling compress_tool again for this result."
+)
+
 COMPRESS_TOOL_DESCRIPTION = (
     "Replace previous tool outputs in future model context when they contain lots of irrelevant "
     "content and only a small part is useful for the remaining task. "
@@ -90,6 +96,14 @@ def compress_tool_messages(arguments: dict[str, Any], context: ToolExecutionCont
 
     if not pending_compressions:
         return "No changes: all matching tool results are already compressed"
+
+    over_limit_messages = [
+        tool_message
+        for tool_message, _ in pending_compressions
+        if len(tool_message.compressions) >= MAX_COMPRESSIONS_PER_TOOL_MESSAGE
+    ]
+    if over_limit_messages:
+        return MAX_COMPRESSION_MESSAGE
 
     for tool_message, replace_content in pending_compressions:
         tool_message.compressions.append(replace_content)
