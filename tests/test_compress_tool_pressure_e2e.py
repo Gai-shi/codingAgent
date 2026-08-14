@@ -55,6 +55,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
                 encoding="utf-8"
             )
             report = (target / "auditor" / "report.py").read_text(encoding="utf-8")
+            schema = (target / "auditor" / "schema.py").read_text(encoding="utf-8")
+            formatting = (target / "auditor" / "formatting.py").read_text(encoding="utf-8")
             manifest = (target / ".ai_job_eval_case.json").read_text(encoding="utf-8")
 
         self.assertIn("01_default_release_packet.txt", index)
@@ -69,7 +71,9 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("KEEP-CANDIDATE-DEFAULT", candidate_delta)
         self.assertIn("HND-9173-W33", overrides)
         self.assertIn("deny-legacy-policy", overrides)
-        self.assertIn("return {}", report)
+        self.assertIn("REPORT_KEYS", report)
+        self.assertIn("REPORT_KEYS", schema)
+        self.assertIn("def build_summary", formatting)
         self.assertIn(CASE_CONFLICT_CONTRACT_DELAY, manifest)
 
     def test_trace_debug_fixture_contains_delayed_trace_rule(self):
@@ -94,6 +98,7 @@ class CompressToolPressureE2ETest(unittest.TestCase):
                 encoding="utf-8"
             )
             decision = (target / "reconciler" / "decision.py").read_text(encoding="utf-8")
+            rules = (target / "reconciler" / "rules.py").read_text(encoding="utf-8")
 
         self.assertIn("01_incident_triage_packet.log", index)
         self.assertIn("ERRATA_ROUTE = evidence/97_trace_errata_index.txt", triage)
@@ -106,10 +111,12 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("quarantine-ledger-batch", notes)
         self.assertIn("defer-audit-sync", notes)
         self.assertIn("rule-ledger-9173", notes)
-        self.assertIn("NO_ACTIVE_RULE", decision)
+        self.assertIn("DEFAULT_PLAN", decision)
+        self.assertIn("NO_ACTIVE_RULE", rules)
+        self.assertIn("PLAN_KEYS", rules)
         self.assertIn("Active Trace Manifest", manifest)
         self.assertIn("TRACE-CANDIDATE", candidate_manifest)
-        self.assertIn('"action": "monitor"', decision)
+        self.assertIn('"action": "monitor"', rules)
 
     def test_prompts_do_not_name_compress_tool(self):
         for case_id in (CASE_CONFLICT_CONTRACT_DELAY, CASE_TRACE_DEBUG_DELAY):
@@ -155,6 +162,25 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("non-active/default 输出契约", joined)
         self.assertIn("active 规则和 default 契约", joined)
         self.assertIn("不要跳过 route 中要求检查的候选或回滚文件", joined)
+
+    def test_hard_prompts_add_consolidation_turn_for_deeper_project(self):
+        conflict_turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="hard")
+        trace_turns = build_prompt_turns(case_id=CASE_TRACE_DEBUG_DELAY, pressure="hard")
+        smoke_turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="smoke")
+
+        self.assertEqual([turn.kind for turn in conflict_turns], [
+            "default_handoff_research",
+            "errata_research",
+            "final_contract_consolidation",
+            "implementation",
+        ])
+        self.assertEqual([turn.kind for turn in trace_turns], [
+            "default_trace_research",
+            "trace_errata_research",
+            "trace_rule_consolidation",
+            "debug_fix",
+        ])
+        self.assertEqual(len(smoke_turns), 3)
 
     def test_conflict_grader_accepts_exact_hidden_contract_and_rejects_unimplemented_fixture(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -769,6 +795,30 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertTrue(comparison["both_passed"])
         self.assertEqual(comparison["verdict"], "inconclusive_enabled_compress_tool_failed")
 
+    def test_compare_marks_both_passed_faster_enabled_as_lossless_speedup(self):
+        enabled = {
+            "grade": {"passed": True, "score": 100},
+            "elapsed_seconds": 8,
+            "diagnostics": {
+                "compress_tool_call_count": 1,
+                "compress_tool_success_count": 1,
+                "compress_tool_error_count": 0,
+                "estimated_tool_context_chars_saved": 1000,
+            },
+        }
+        disabled = {
+            "grade": {"passed": True, "score": 100},
+            "elapsed_seconds": 10,
+            "diagnostics": {"compress_tool_call_count": 0},
+        }
+
+        comparison = _compare(enabled, disabled)
+
+        self.assertTrue(comparison["lossless_speedup"])
+        self.assertTrue(comparison["both_passed"])
+        self.assertEqual(comparison["latency_ratio"], 0.8)
+        self.assertEqual(comparison["verdict"], "lossless_speedup")
+
     def test_summarize_suite_reports_correctness_and_efficiency_counters(self):
         cases = {
             "case_a": {
@@ -777,6 +827,7 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                     "disabled": {"grade": {"passed": False, "score": 40}, "elapsed_seconds": 12},
                     "comparison": {
                         "compress_tool_helped": True,
+                        "lossless_speedup": False,
                         "both_passed": False,
                         "both_failed": False,
                         "compress_tool_regressed": False,
@@ -792,12 +843,13 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                     "disabled": {"grade": {"passed": True, "score": 80}, "elapsed_seconds": 8},
                     "comparison": {
                         "compress_tool_helped": False,
+                        "lossless_speedup": True,
                         "both_passed": True,
                         "both_failed": False,
                         "compress_tool_regressed": False,
-                        "enabled_compress_tool_effective": False,
-                        "enabled_compress_tool_call_count": 0,
-                        "enabled_estimated_tool_context_chars_saved": 0,
+                        "enabled_compress_tool_effective": True,
+                        "enabled_compress_tool_call_count": 1,
+                        "enabled_estimated_tool_context_chars_saved": 2000,
                     },
                 }
             },
@@ -810,8 +862,10 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertEqual(summary["disabled_pass_count"], 1)
         self.assertEqual(summary["correctness_delta"], 1)
         self.assertEqual(summary["compress_tool_helped_count"], 1)
-        self.assertEqual(summary["enabled_compress_tool_effective_count"], 1)
-        self.assertEqual(summary["enabled_estimated_tool_context_chars_saved"], 1000)
+        self.assertEqual(summary["lossless_speedup_count"], 1)
+        self.assertEqual(summary["enabled_compress_tool_effective_count"], 2)
+        self.assertEqual(summary["enabled_estimated_tool_context_chars_saved"], 3000)
+        self.assertEqual(summary["latency_ratio"], 0.95)
 
     def test_summarize_policy_results_keeps_neutral_and_guided_deltas_separate(self):
         policy_results = {
@@ -825,6 +879,7 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                     "disabled_score_total": 140,
                     "score_delta_total": 0,
                     "compress_tool_helped_count": 0,
+                    "lossless_speedup_count": 0,
                     "both_passed_count": 1,
                     "both_failed_count": 1,
                     "compress_tool_regressed_count": 0,
@@ -845,6 +900,7 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                     "disabled_score_total": 140,
                     "score_delta_total": 50,
                     "compress_tool_helped_count": 1,
+                    "lossless_speedup_count": 1,
                     "both_passed_count": 1,
                     "both_failed_count": 0,
                     "compress_tool_regressed_count": 0,
@@ -863,9 +919,11 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertEqual(summary["cell_count"], 4)
         self.assertEqual(summary["correctness_delta"], 1)
         self.assertEqual(summary["compress_tool_helped_count"], 1)
+        self.assertEqual(summary["lossless_speedup_count"], 1)
         self.assertEqual(summary["pure_availability_delta"], 0)
         self.assertEqual(summary["guided_tool_delta"], 1)
         self.assertEqual(summary["enabled_compress_tool_call_count"], 2)
+        self.assertEqual(summary["latency_ratio"], 1.2222)
 
     def test_format_run_summary_points_to_result_and_log_without_full_json(self):
         result = {
@@ -874,6 +932,8 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                 "disabled_success_rate": 0.5,
                 "correctness_delta": 1,
                 "compress_tool_helped_count": 1,
+                "lossless_speedup_count": 1,
+                "latency_ratio": 0.8,
                 "enabled_compress_tool_call_count": 2,
             }
         }
@@ -883,6 +943,8 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertIn("result_json: /tmp/result.json", text)
         self.assertIn("run_log: /tmp/run.log", text)
         self.assertIn("enabled_success_rate=1.0", text)
+        self.assertIn("lossless_speedup_count=1", text)
+        self.assertIn("latency_ratio=0.8", text)
         self.assertNotIn("policy_results", text)
 
     def test_run_variant_isolates_ai_job_session_and_log_paths_per_variant_without_context_override(self):

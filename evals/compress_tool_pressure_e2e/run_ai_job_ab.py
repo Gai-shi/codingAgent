@@ -208,7 +208,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _append_result_summary_log(run_log_path, result_path, result)
     print(_format_run_summary(result_path, run_log_path, result))
-    return 0 if result["summary"]["compress_tool_helped_count"] > 0 else 1
+    summary = result["summary"]
+    return 0 if summary["compress_tool_helped_count"] > 0 or summary["lossless_speedup_count"] > 0 else 1
 
 
 def _tool_policy_names(selection: str) -> list[str]:
@@ -238,6 +239,8 @@ def _append_result_summary_log(path: Path, result_path: Path, result: dict[str, 
                 f"disabled_success_rate={summary['disabled_success_rate']} "
                 f"correctness_delta={summary['correctness_delta']} "
                 f"compress_tool_helped_count={summary['compress_tool_helped_count']} "
+                f"lossless_speedup_count={summary['lossless_speedup_count']} "
+                f"latency_ratio={summary['latency_ratio']} "
                 f"enabled_compress_tool_call_count={summary['enabled_compress_tool_call_count']}"
             ),
         )
@@ -255,6 +258,8 @@ def _format_run_summary(result_path: Path, run_log_path: Path, result: dict[str,
             f"disabled_success_rate={summary['disabled_success_rate']}, "
             f"correctness_delta={summary['correctness_delta']}, "
             f"compress_tool_helped_count={summary['compress_tool_helped_count']}, "
+            f"lossless_speedup_count={summary['lossless_speedup_count']}, "
+            f"latency_ratio={summary['latency_ratio']}, "
             f"enabled_compress_tool_call_count={summary['enabled_compress_tool_call_count']}"
         ),
     ]
@@ -532,6 +537,20 @@ def _compare(enabled: dict[str, object], disabled: dict[str, object]) -> dict[st
     enabled_compress_tool_success_count = int(enabled_diagnostics.get("compress_tool_success_count", 0))
     enabled_saved_chars = int(enabled_diagnostics.get("estimated_tool_context_chars_saved", 0))
     enabled_compress_tool_effective = enabled_compress_tool_success_count > 0 and enabled_saved_chars > 0
+    enabled_elapsed_seconds = float(
+        enabled_diagnostics.get("elapsed_seconds", enabled.get("elapsed_seconds", 0))
+    )
+    disabled_elapsed_seconds = float(
+        disabled_diagnostics.get("elapsed_seconds", disabled.get("elapsed_seconds", 0))
+    )
+    latency_ratio = _latency_ratio(enabled_elapsed_seconds, disabled_elapsed_seconds)
+    lossless_speedup = (
+        enabled_passed
+        and disabled_passed
+        and enabled_compress_tool_effective
+        and latency_ratio is not None
+        and latency_ratio < 1.0
+    )
     return {
         "verdict": _comparison_verdict(
             enabled_passed=enabled_passed,
@@ -540,8 +559,10 @@ def _compare(enabled: dict[str, object], disabled: dict[str, object]) -> dict[st
             enabled_compress_tool_success_count=enabled_compress_tool_success_count,
             enabled_compress_tool_error_count=int(enabled_diagnostics.get("compress_tool_error_count", 0)),
             enabled_compress_tool_effective=enabled_compress_tool_effective,
+            lossless_speedup=lossless_speedup,
         ),
         "compress_tool_helped": enabled_passed and not disabled_passed and enabled_compress_tool_effective,
+        "lossless_speedup": lossless_speedup,
         "both_passed": enabled_passed and disabled_passed,
         "both_failed": not enabled_passed and not disabled_passed,
         "compress_tool_regressed": not enabled_passed and disabled_passed,
@@ -555,8 +576,9 @@ def _compare(enabled: dict[str, object], disabled: dict[str, object]) -> dict[st
         "disabled_compress_tool_call_count": disabled_diagnostics.get("compress_tool_call_count", 0),
         "enabled_read_file_tool_result_chars": enabled_diagnostics.get("read_file_tool_result_chars", 0),
         "disabled_read_file_tool_result_chars": disabled_diagnostics.get("read_file_tool_result_chars", 0),
-        "enabled_elapsed_seconds": enabled_diagnostics.get("elapsed_seconds", enabled.get("elapsed_seconds", 0)),
-        "disabled_elapsed_seconds": disabled_diagnostics.get("elapsed_seconds", disabled.get("elapsed_seconds", 0)),
+        "enabled_elapsed_seconds": enabled_elapsed_seconds,
+        "disabled_elapsed_seconds": disabled_elapsed_seconds,
+        "latency_ratio": latency_ratio,
         "enabled_estimated_tool_context_chars_saved": enabled_saved_chars,
     }
 
@@ -608,6 +630,7 @@ def _summarize_suite(cases: dict[str, dict[str, object]]) -> dict[str, object]:
         "disabled_score_total": disabled_score_total,
         "score_delta_total": enabled_score_total - disabled_score_total,
         "compress_tool_helped_count": sum(1 for item in comparisons if item.get("compress_tool_helped")),
+        "lossless_speedup_count": sum(1 for item in comparisons if item.get("lossless_speedup")),
         "both_passed_count": sum(1 for item in comparisons if item.get("both_passed")),
         "both_failed_count": sum(1 for item in comparisons if item.get("both_failed")),
         "compress_tool_regressed_count": sum(1 for item in comparisons if item.get("compress_tool_regressed")),
@@ -617,6 +640,7 @@ def _summarize_suite(cases: dict[str, dict[str, object]]) -> dict[str, object]:
         "enabled_elapsed_seconds": round(enabled_elapsed_seconds, 3),
         "disabled_elapsed_seconds": round(disabled_elapsed_seconds, 3),
         "elapsed_seconds_delta": round(enabled_elapsed_seconds - disabled_elapsed_seconds, 3),
+        "latency_ratio": _latency_ratio(enabled_elapsed_seconds, disabled_elapsed_seconds),
     }
 
 
@@ -659,6 +683,9 @@ def _summarize_policy_results(policy_results: dict[str, dict[str, object]]) -> d
         "compress_tool_helped_count": sum(
             int(summary.get("compress_tool_helped_count", 0)) for summary in policy_summaries.values()
         ),
+        "lossless_speedup_count": sum(
+            int(summary.get("lossless_speedup_count", 0)) for summary in policy_summaries.values()
+        ),
         "both_passed_count": sum(
             int(summary.get("both_passed_count", 0)) for summary in policy_summaries.values()
         ),
@@ -683,6 +710,7 @@ def _summarize_policy_results(policy_results: dict[str, dict[str, object]]) -> d
         "enabled_elapsed_seconds": round(enabled_elapsed_seconds, 3),
         "disabled_elapsed_seconds": round(disabled_elapsed_seconds, 3),
         "elapsed_seconds_delta": round(enabled_elapsed_seconds - disabled_elapsed_seconds, 3),
+        "latency_ratio": _latency_ratio(enabled_elapsed_seconds, disabled_elapsed_seconds),
         "pure_availability_delta": _policy_correctness_delta(
             policy_summaries,
             TOOL_POLICY_NEUTRAL,
@@ -708,6 +736,12 @@ def _ratio(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4)
 
 
+def _latency_ratio(enabled_elapsed_seconds: float, disabled_elapsed_seconds: float) -> float | None:
+    if disabled_elapsed_seconds <= 0:
+        return None
+    return round(enabled_elapsed_seconds / disabled_elapsed_seconds, 4)
+
+
 def _comparison_verdict(
     *,
     enabled_passed: bool,
@@ -716,6 +750,7 @@ def _comparison_verdict(
     enabled_compress_tool_success_count: int,
     enabled_compress_tool_error_count: int,
     enabled_compress_tool_effective: bool,
+    lossless_speedup: bool,
 ) -> str:
     if enabled_passed and not disabled_passed:
         if enabled_compress_tool_effective:
@@ -724,6 +759,8 @@ def _comparison_verdict(
     if not enabled_passed and disabled_passed:
         return "compress_tool_regressed"
     if enabled_passed and disabled_passed:
+        if lossless_speedup:
+            return "lossless_speedup"
         if enabled_compress_tool_error_count:
             return "inconclusive_enabled_compress_tool_failed"
         if enabled_compress_tool_call_count == 0:

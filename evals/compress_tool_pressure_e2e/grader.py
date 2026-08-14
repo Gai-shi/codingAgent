@@ -195,16 +195,25 @@ def grade_target(
 
 def _grade_conflict_contract(target: Path, *, run_tests: bool) -> GradeResult:
     report_path = target / "auditor" / "report.py"
+    schema_path = target / "auditor" / "schema.py"
+    formatting_path = target / "auditor" / "formatting.py"
     report_text = _read_optional(report_path)
+    schema_text = _read_optional(schema_path)
+    formatting_text = _read_optional(formatting_path)
+    combined_text = "\n".join([report_text, schema_text, formatting_text])
 
     required_hits: list[str] = []
     missing_required: list[str] = []
     forbidden_hits: list[str] = []
 
     _require_path(report_path, "auditor/report.py exists", required_hits, missing_required)
+    _require_path(schema_path, "auditor/schema.py exists", required_hits, missing_required)
+    _require_path(formatting_path, "auditor/formatting.py exists", required_hits, missing_required)
     _require_text(report_text, "def build_report", "build_report is defined", required_hits, missing_required)
-    _require_values(report_text, CONFLICT_EXPECTED_VALUES, required_hits, missing_required)
-    _reject_values(report_text, CONFLICT_FORBIDDEN_VALUES, forbidden_hits)
+    _require_text(schema_text, "REPORT_KEYS", "REPORT_KEYS schema is preserved", required_hits, missing_required)
+    _require_text(formatting_text, "def build_summary", "build_summary helper is preserved", required_hits, missing_required)
+    _require_values(combined_text, CONFLICT_EXPECTED_VALUES, required_hits, missing_required)
+    _reject_values(combined_text, CONFLICT_FORBIDDEN_VALUES, forbidden_hits)
 
     runtime_checks = _run_python_checks(
         target,
@@ -299,13 +308,17 @@ assert report["control_tags"] == ["sox-audit", "retention-critical", "post-lock"
 
 def _grade_trace_debug(target: Path, *, run_tests: bool) -> GradeResult:
     decision_path = target / "reconciler" / "decision.py"
+    rules_path = target / "reconciler" / "rules.py"
     decision_text = _read_optional(decision_path)
+    rules_text = _read_optional(rules_path)
+    combined_text = "\n".join([decision_text, rules_text])
 
     required_hits: list[str] = []
     missing_required: list[str] = []
     forbidden_hits: list[str] = []
 
     _require_path(decision_path, "reconciler/decision.py exists", required_hits, missing_required)
+    _require_path(rules_path, "reconciler/rules.py exists", required_hits, missing_required)
     _require_text(
         decision_text,
         "def build_reconciliation_plan",
@@ -313,8 +326,9 @@ def _grade_trace_debug(target: Path, *, run_tests: bool) -> GradeResult:
         required_hits,
         missing_required,
     )
-    _require_values(decision_text, TRACE_EXPECTED_VALUES, required_hits, missing_required)
-    _reject_values(decision_text, TRACE_FORBIDDEN_VALUES, forbidden_hits)
+    _require_text(rules_text, "PLAN_KEYS", "PLAN_KEYS schema is preserved", required_hits, missing_required)
+    _require_values(combined_text, TRACE_EXPECTED_VALUES, required_hits, missing_required)
+    _reject_values(combined_text, TRACE_FORBIDDEN_VALUES, forbidden_hits)
 
     runtime_checks = _run_python_checks(
         target,

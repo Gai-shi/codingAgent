@@ -101,10 +101,11 @@ def build_prompt_turns(
     case_id: str = CASE_ID,
     pressure: str = DEFAULT_PRESSURE,
 ) -> list[PromptTurn]:
+    config = resolve_pressure_config(pressure)
     if case_id == CASE_CONFLICT_CONTRACT_DELAY:
-        return _conflict_contract_prompt_turns()
+        return _conflict_contract_prompt_turns(config)
     if case_id == CASE_TRACE_DEBUG_DELAY:
-        return _trace_debug_prompt_turns()
+        return _trace_debug_prompt_turns(config)
     raise ValueError(f"unknown case_id: {case_id}")
 
 
@@ -124,6 +125,10 @@ def prompt_texts(turns: Sequence[PromptTurn]) -> list[str]:
     return [turn.text for turn in turns]
 
 
+def is_deep_pressure(config: PressureConfig) -> bool:
+    return config.name == "hard"
+
+
 def prompt_stats(
     turns: Sequence[PromptTurn],
     *,
@@ -136,6 +141,7 @@ def prompt_stats(
     return {
         "case_id": case_id,
         "pressure": config.name,
+        "depth": "deep" if is_deep_pressure(config) else "standard",
         "turn_count": len(turns),
         "prompt_chars": sum(len(text) for text in prompts),
         "evidence_chars": evidence_chars(case_id=case_id, noise_blocks=config.noise_blocks),
@@ -188,6 +194,8 @@ def _create_conflict_contract_workspace(target: Path, config: PressureConfig) ->
     (target / "tests").mkdir()
 
     _write(target / "auditor" / "__init__.py", '"""Audit fixture package."""\n')
+    _write(target / "auditor" / "schema.py", _conflict_schema_py())
+    _write(target / "auditor" / "formatting.py", _conflict_formatting_py())
     _write(target / "auditor" / "report.py", _conflict_report_py())
     _write(target / "tests" / "test_report.py", _conflict_test_report_py())
     _write(target / "evidence" / "00_index.txt", _conflict_evidence_index())
@@ -231,6 +239,7 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
     (target / "tests").mkdir()
 
     _write(target / "reconciler" / "__init__.py", '"""Trace reconciliation fixture package."""\n')
+    _write(target / "reconciler" / "rules.py", _trace_rules_py())
     _write(target / "reconciler" / "decision.py", _trace_decision_py())
     _write(target / "tests" / "test_decision.py", _trace_test_decision_py())
     _write(target / "evidence" / "00_index.txt", _trace_evidence_index())
@@ -264,8 +273,8 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
     _write(target / "README.md", _trace_readme_md())
 
 
-def _conflict_contract_prompt_turns() -> list[PromptTurn]:
-    return [
+def _conflict_contract_prompt_turns(config: PressureConfig) -> list[PromptTurn]:
+    turns = [
         PromptTurn(
             kind="default_handoff_research",
             text="""请先做默认交接包调研。
@@ -281,23 +290,38 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
 请回到默认包里看到的 route，读取对应 errata，并按 errata 的消歧 route 顺序定位有效最终契约依据，不要跳过 route 中要求检查的候选或回滚文件。
 本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认包事实已作废、后续实现只应保留哪些最终依据，不要粘贴长证据内容。""",
         ),
+    ]
+    if is_deep_pressure(config):
+        turns.append(
+            PromptTurn(
+                kind="final_contract_consolidation",
+                text="""请做一次实现前的最终约束整理。
+
+不要重新扫描整个 evidence 目录；只使用上一轮已经确认的有效最终依据。
+请读取 README.md、auditor/report.py、auditor/schema.py、auditor/formatting.py 和 tests/，整理实现必须满足的字段、模块职责和 Python 3.9 兼容约束。
+本轮不要修改文件，不要运行测试；只输出简短清单，后续实现必须以这份清单为准。""",
+            )
+        )
+    turns.append(
         PromptTurn(
             kind="implementation",
             text="""现在完成实现。
 
 不要重新读取 evidence 目录；直接使用上一轮证据调研得到的有效最终契约。
-请读取 README.md、auditor/report.py 和 tests/，然后实现 auditor/report.py 里的 build_report()。
+请读取 README.md、auditor/report.py、auditor/schema.py、auditor/formatting.py 和 tests/，然后实现 auditor/report.py 里的 build_report()。
+保持 report/schema/formatting 的现有职责边界，不要把所有逻辑挤进一个无关的大函数。
 不要使用废弃、候选、回滚或错误 owner 的值。
 目标运行时是 Python 3.9；不要使用 `str | list[str]` 这类 Python 3.10+ 类型语法或依赖 Python 3.10 的类型别名。
 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
 完成后简要说明改了哪些文件。""",
         ),
-    ]
+    )
+    return turns
 
 
-def _trace_debug_prompt_turns() -> list[PromptTurn]:
-    return [
+def _trace_debug_prompt_turns(config: PressureConfig) -> list[PromptTurn]:
+    turns = [
         PromptTurn(
             kind="default_trace_research",
             text="""请先做默认 trace 交接包调研。
@@ -313,19 +337,34 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
 请回到默认包里看到的 route，读取对应 errata，并按 errata 的消歧 route 顺序定位有效 trace 依据，不要跳过 route 中要求检查的候选或回滚文件；最终依据包括 active 规则和 non-active/default 输出契约。
 本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认 triage 事实已作废、后续实现只应保留哪些 active 规则和 default 契约，不要粘贴长证据内容。""",
         ),
+    ]
+    if is_deep_pressure(config):
+        turns.append(
+            PromptTurn(
+                kind="trace_rule_consolidation",
+                text="""请做一次修复前的最终 trace 约束整理。
+
+不要重新扫描整个 evidence 目录；只使用上一轮已经确认的 active 规则和 non-active/default 输出契约。
+请读取 README.md、reconciler/decision.py、reconciler/rules.py 和 tests/，整理匹配条件、默认分支、模块职责和 Python 3.9 兼容约束。
+本轮不要修改文件，不要运行测试；只输出简短清单，后续修复必须以这份清单为准。""",
+            )
+        )
+    turns.append(
         PromptTurn(
             kind="debug_fix",
             text="""现在修复代码。
 
 不要重新读取 evidence 目录；直接使用上一轮 trace 调研得到的有效规则和 non-active/default 输出契约。
-请读取 README.md、reconciler/decision.py 和 tests/，然后修复 build_reconciliation_plan()。
+请读取 README.md、reconciler/decision.py、reconciler/rules.py 和 tests/，然后修复 build_reconciliation_plan()。
+保持 decision/rules 的现有职责边界，不要把所有规则常量挤进一个无关的大函数。
 不要使用废弃、候选、回滚或错误 owner 的处理规则。
 目标运行时是 Python 3.9；不要使用 `str | list[str]` 这类 Python 3.10+ 类型语法或依赖 Python 3.10 的类型别名。
 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
 完成后简要说明改了哪些文件。""",
         ),
-    ]
+    )
+    return turns
 
 
 def _conflict_contract_decisions(*, noise_blocks: int) -> str:
@@ -708,10 +747,83 @@ def _conflict_report_py() -> str:
 
 from __future__ import annotations
 
+from .formatting import build_summary
+from .schema import REPORT_KEYS
+
 
 def build_report() -> dict[str, object]:
     """Return the final audit report metadata."""
-    return {}
+    report: dict[str, object] = {}
+    return {key: report[key] for key in REPORT_KEYS}
+'''
+
+
+def _conflict_schema_py() -> str:
+    return '''"""Stable report schema for the audit fixture."""
+
+from __future__ import annotations
+
+
+REPORT_KEYS = [
+    "title",
+    "marker",
+    "policy_code",
+    "owner",
+    "status",
+    "summary",
+    "risk_level",
+    "review_window",
+    "escalation_channel",
+    "regions",
+    "control_plane",
+    "contract_version",
+    "dataset_fingerprint",
+    "routing_keys",
+    "evidence_checksums",
+    "audit_tags",
+    "validation_gates",
+    "owner_chain",
+    "approval_chain",
+    "runbook_steps",
+    "watchlist",
+    "notification_channels",
+    "deadline_matrix",
+    "blocking_conditions",
+    "release_flags",
+    "handoff_ticket",
+    "review_signoffs",
+    "rollback_guards",
+    "control_tags",
+]
+
+
+STRING_KEYS = [
+    "title",
+    "marker",
+    "policy_code",
+    "owner",
+    "status",
+    "summary",
+    "risk_level",
+    "review_window",
+    "escalation_channel",
+    "control_plane",
+    "contract_version",
+    "dataset_fingerprint",
+    "handoff_ticket",
+]
+'''
+
+
+def _conflict_formatting_py() -> str:
+    return '''"""Formatting helpers for audit reports."""
+
+from __future__ import annotations
+
+
+def build_summary(prefix: str, marker: str, status: str, owner: str) -> str:
+    """Build the stable human-readable report summary."""
+    return f"{prefix} {marker} status={status} owner={owner}"
 '''
 
 
@@ -721,59 +833,15 @@ def _conflict_test_report_py() -> str:
 import unittest
 
 from auditor.report import build_report
+from auditor.schema import REPORT_KEYS, STRING_KEYS
 
 
 class ReportShapeTest(unittest.TestCase):
     def test_build_report_has_required_shape(self):
         report = build_report()
 
-        required_keys = {
-            "title",
-            "marker",
-            "policy_code",
-            "owner",
-            "status",
-            "summary",
-            "risk_level",
-            "review_window",
-            "escalation_channel",
-            "regions",
-            "control_plane",
-            "contract_version",
-            "dataset_fingerprint",
-            "routing_keys",
-            "evidence_checksums",
-            "audit_tags",
-            "validation_gates",
-            "owner_chain",
-            "approval_chain",
-            "runbook_steps",
-            "watchlist",
-            "notification_channels",
-            "deadline_matrix",
-            "blocking_conditions",
-            "release_flags",
-            "handoff_ticket",
-            "review_signoffs",
-            "rollback_guards",
-            "control_tags",
-        }
-        self.assertEqual(set(report), required_keys)
-        for key in {
-            "title",
-            "marker",
-            "policy_code",
-            "owner",
-            "status",
-            "summary",
-            "risk_level",
-            "review_window",
-            "escalation_channel",
-            "control_plane",
-            "contract_version",
-            "dataset_fingerprint",
-            "handoff_ticket",
-        }:
+        self.assertEqual(list(report), REPORT_KEYS)
+        for key in STRING_KEYS:
             self.assertIsInstance(report[key], str)
             self.assertTrue(report[key])
         self.assertIsInstance(report["regions"], dict)
@@ -819,6 +887,9 @@ def _conflict_readme_md() -> str:
 
 Implement `auditor.report.build_report()` from the valid release contract found
 during the evidence research phase.
+
+Keep the generated report ordered according to `auditor.schema.REPORT_KEYS`.
+Use `auditor.formatting.build_summary()` for the final summary string.
 
 The target test runtime is Python 3.9.
 """
@@ -1311,29 +1382,65 @@ def _trace_decision_py() -> str:
 
 from __future__ import annotations
 
+from .rules import DEFAULT_PLAN
+
 
 def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
     """Return the reconciliation plan for a trace event."""
-    return {
-        "action": "monitor",
-        "owner": "triage",
-        "severity": "sev4",
-        "retry_after_minutes": "15",
-        "status": "watching",
-        "marker": event.get("trace_id", ""),
-        "queue": "triage-watch",
-        "runbook": "rb-triage-default",
-        "escalation_channel": "#triage",
-        "sla": "PT15M",
-        "evidence_hash": "sha256:default-monitor",
-        "decision_flags": ["default", "non-active"],
-        "rule_id": "rule-default-monitor",
-        "resolver_group": "triage/oncall",
-        "audit_tags": ["default", "non-active"],
-        "suppressions": ["active-only"],
-        "default_status_code": "NO_ACTIVE_RULE",
-        "default_owner_chain": ["triage", "ledger-watch"],
-    }
+    plan = dict(DEFAULT_PLAN)
+    plan["marker"] = event.get("trace_id", "")
+    return plan
+'''
+
+
+def _trace_rules_py() -> str:
+    return '''"""Rule constants for production trace reconciliation."""
+
+from __future__ import annotations
+
+
+PLAN_KEYS = [
+    "action",
+    "owner",
+    "severity",
+    "retry_after_minutes",
+    "status",
+    "marker",
+    "queue",
+    "runbook",
+    "escalation_channel",
+    "sla",
+    "evidence_hash",
+    "decision_flags",
+    "rule_id",
+    "resolver_group",
+    "audit_tags",
+    "suppressions",
+    "default_status_code",
+    "default_owner_chain",
+]
+
+
+DEFAULT_PLAN = {
+    "action": "monitor",
+    "owner": "triage",
+    "severity": "sev4",
+    "retry_after_minutes": "15",
+    "status": "watching",
+    "marker": "",
+    "queue": "triage-watch",
+    "runbook": "rb-triage-default",
+    "escalation_channel": "#triage",
+    "sla": "PT15M",
+    "evidence_hash": "sha256:default-monitor",
+    "decision_flags": ["default", "non-active"],
+    "rule_id": "rule-default-monitor",
+    "resolver_group": "triage/oncall",
+    "audit_tags": ["default", "non-active"],
+    "suppressions": ["active-only"],
+    "default_status_code": "NO_ACTIVE_RULE",
+    "default_owner_chain": ["triage", "ledger-watch"],
+}
 '''
 
 
@@ -1343,6 +1450,7 @@ def _trace_test_decision_py() -> str:
 import unittest
 
 from reconciler.decision import build_reconciliation_plan
+from reconciler.rules import PLAN_KEYS
 
 
 class ReconciliationPlanShapeTest(unittest.TestCase):
@@ -1357,29 +1465,7 @@ class ReconciliationPlanShapeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(
-            set(plan),
-            {
-                "action",
-                "owner",
-                "severity",
-                "retry_after_minutes",
-                "status",
-                "marker",
-                "queue",
-                "runbook",
-                "escalation_channel",
-                "sla",
-                "evidence_hash",
-                "decision_flags",
-                "rule_id",
-                "resolver_group",
-                "audit_tags",
-                "suppressions",
-                "default_status_code",
-                "default_owner_chain",
-            },
-        )
+        self.assertEqual(list(plan), PLAN_KEYS)
         for key, value in plan.items():
             if key in {"decision_flags", "audit_tags", "suppressions", "default_owner_chain"}:
                 continue
@@ -1405,6 +1491,9 @@ def _trace_readme_md() -> str:
 
 Fix `reconciler.decision.build_reconciliation_plan()` using the active
 production trace rule found during the evidence research phase.
+
+Keep the returned plan ordered according to `reconciler.rules.PLAN_KEYS`.
+Keep shared rule/default constants in `reconciler.rules`.
 
 The target test runtime is Python 3.9.
 """
