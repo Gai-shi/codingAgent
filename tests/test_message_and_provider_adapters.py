@@ -5,6 +5,7 @@ import unittest
 
 from ai_job.communication import (
     AssistantMessage,
+    MessageState,
     SummaryMessage,
     SystemMessage,
     ToolMessage,
@@ -67,6 +68,45 @@ def make_app_env():
 
 
 class MessageDebugTest(unittest.TestCase):
+    def test_message_state_defaults_to_context_after_system_message(self):
+        hidden_message = AssistantMessage(content="hidden", visible_to_model=False)
+        history = [
+            SystemMessage(content="system"),
+            UserMessage(content="active"),
+            hidden_message,
+        ]
+
+        message_state = MessageState(history=history)
+
+        self.assertEqual(
+            message_state.model_visible_history(),
+            [
+                SystemMessage(content="system"),
+                UserMessage(content="active"),
+            ],
+        )
+
+    def test_message_state_rejects_zero_context_start_index(self):
+        message_state = MessageState(
+            history=[SystemMessage(content="system"), UserMessage(content="active")],
+            context_start_index=0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            message_state.model_visible_history()
+
+    def test_message_state_rejects_empty_history_for_model_context(self):
+        message_state = MessageState(history=[])
+
+        with self.assertRaisesRegex(ValueError, "system message"):
+            message_state.model_visible_history()
+
+    def test_message_state_requires_system_message_at_index_zero(self):
+        message_state = MessageState(history=[UserMessage(content="active")])
+
+        with self.assertRaisesRegex(ValueError, "SystemMessage"):
+            message_state.model_visible_history()
+
     def test_message_history_to_debug_dicts_preserves_roles_and_tool_calls(self):
         history = [
             SystemMessage(content="system"),
@@ -99,6 +139,24 @@ class MessageDebugTest(unittest.TestCase):
         self.assertEqual(
             result[4],
             {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+        )
+
+    def test_model_visible_debug_dicts_use_compressed_tool_content(self):
+        history = [
+            ToolMessage(
+                tool_call_id="call-1",
+                content="raw result",
+                compressions=["compressed result"],
+            )
+        ]
+
+        self.assertEqual(
+            message_history_to_debug_dicts(history, use_model_visible_content=True),
+            [{"role": "tool", "tool_call_id": "call-1", "content": "compressed result"}],
+        )
+        self.assertEqual(
+            message_history_to_debug_dicts(history),
+            [{"role": "tool", "tool_call_id": "call-1", "content": "raw result"}],
         )
 
 
@@ -290,6 +348,13 @@ class OpenAIModelTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "缺少 choices"):
             model.complete([UserMessage(content="hi")], ToolRegistry([]))
 
+        empty_choices_model = OpenAIModel(
+            make_app_env(),
+            http_client=FakeHttpClient(json.dumps({"choices": []})),
+        )
+        with self.assertRaisesRegex(RuntimeError, "缺少 choices"):
+            empty_choices_model.complete([UserMessage(content="hi")], ToolRegistry([]))
+
     def test_complete_wraps_http_client_errors_as_llm_request_failures(self):
         model = OpenAIModel(
             make_app_env(),
@@ -340,6 +405,25 @@ class OpenAIModelTest(unittest.TestCase):
                     }
                 ),
                 "tool_call 格式异常",
+            ),
+            (
+                json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "function": {"name": "example", "arguments": "{}"},
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "missing id",
             ),
         ]
 

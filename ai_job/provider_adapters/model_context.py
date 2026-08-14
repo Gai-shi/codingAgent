@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-DEFAULT_CONTEXT_WINDOW = 128000
+DEFAULT_CONTEXT_WINDOW = 800_000
 
 _MODEL_CONTEXT_WINDOWS = {
     "gpt-4.1": 1_047_576,

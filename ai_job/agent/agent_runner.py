@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from ..compress import CompressionManager
-from ..communication import MessageHistory, SystemMessage, ToolMessage
+from ..communication import MessageState, ToolMessage
 from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
-from ..tools import ToolCall, ToolExecutor, ToolRegistry
+from ..tools import ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
+from .message_visibility import COMPRESS_TOOL_NAME, MessageVisibilityManager
 
 
 TRACE_TAG = "trace"
@@ -24,25 +25,30 @@ class AgentRunner:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         max_tool_rounds: int,
-        context_start_index: int = 0,
         compression_manager: CompressionManager | None = None,
+        message_visibility_manager: MessageVisibilityManager | None = None,
     ) -> None:
         self._chat_model = chat_model
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._max_tool_rounds = max_tool_rounds
-        self._context_start_index = context_start_index
         self._compression_manager = compression_manager
+        self._message_visibility_manager = message_visibility_manager or MessageVisibilityManager()
 
-    def run_turn(self, history: MessageHistory) -> str:
+    def run_turn(self, message_state: MessageState) -> str:
         """Run the agent loop for one user turn and mutate history in-place."""
+        history = message_state.history
         for round_index in range(self._max_tool_rounds):
             round_number = round_index + 1
             LogWrapper.debug(TRACE_TAG, f"round={round_number}")
 
             if self._compression_manager is not None:
-                self._compression_manager.compress_if_needed(history)
-            assistant_message = self._chat_model.complete(self._build_model_history(history), self._tool_registry)
+                self._compression_manager.compress_if_needed(message_state)
+            assistant_message = self._chat_model.complete(
+                message_state.model_visible_history(),
+                self._tool_registry,
+            )
+            self._validate_tool_call_batch(assistant_message)
             history.append(assistant_message)
             SessionRecorder.record_session(
                 "AssistantMessage",
@@ -58,7 +64,9 @@ class AgentRunner:
                     raise RuntimeError("LLM 最终响应缺少文本 content")
                 return assistant_message.content
 
+            assistant_message_index = len(history) - 1
             tool_call_count = len(assistant_message.tool_calls)
+            tool_message_indexes: list[int] = []
             for tool_call_index, tool_call in enumerate(assistant_message.tool_calls, start=1):
                 LogWrapper.debug(
                     TRACE_TAG,
@@ -70,25 +78,32 @@ class AgentRunner:
                     ),
                 )
                 SessionRecorder.record_session(f"ToolCall {tool_call.name}", asdict(tool_call), "json")
-                tool_content = self._tool_executor.execute(tool_call)
+                tool_content = self._tool_executor.execute(
+                    tool_call,
+                    ToolExecutionContext(message_state=message_state),
+                )
+                tool_message_index = len(history)
                 history.append(
                     ToolMessage(
                         tool_call_id=tool_call.id,
                         content=tool_content,
                     )
                 )
+                tool_message_indexes.append(tool_message_index)
                 SessionRecorder.record_session(f"ToolResult {tool_call.name}", tool_content, "text")
+            self._message_visibility_manager.apply_after_tool_batch(
+                message_state=message_state,
+                assistant_message_index=assistant_message_index,
+                tool_message_indexes=tool_message_indexes,
+            )
 
         raise RuntimeError(f"工具调用轮数超过上限：{self._max_tool_rounds}")
 
-    def _build_model_history(self, history: MessageHistory) -> MessageHistory:
-        if not history:
-            return []
-
-        active_messages = history[self._context_start_index :]
-        if self._context_start_index > 0 and isinstance(history[0], SystemMessage):
-            return [history[0], *active_messages]
-        return active_messages
+    @staticmethod
+    def _validate_tool_call_batch(assistant_message: "AssistantMessage") -> None:
+        tool_names = {tool_call.name for tool_call in assistant_message.tool_calls}
+        if COMPRESS_TOOL_NAME in tool_names and tool_names != {COMPRESS_TOOL_NAME}:
+            raise RuntimeError("compress_tool cannot be mixed with other tool calls")
 
     @staticmethod
     def _tool_call_log_line(

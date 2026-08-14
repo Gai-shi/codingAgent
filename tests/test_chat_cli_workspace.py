@@ -6,17 +6,21 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from ai_job.chat_cli import (
     APP_ROOT,
-    build_initial_messages,
+    SESSION_RECORD_PATH_ENV,
+    TRACE_LOG_PATH_ENV,
     default_session_record_path,
     default_trace_log_path,
     main,
+    print_context,
     resolve_workspace_root,
 )
-from ai_job.infra.env import AppEnv
+from ai_job.communication import AssistantMessage, MessageState, SystemMessage, UserMessage
+from ai_job.tools import ToolRegistry
 
 
 class ChatCliWorkspaceTest(unittest.TestCase):
@@ -48,37 +52,55 @@ class ChatCliWorkspaceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "workspace 不是目录"):
                 resolve_workspace_root(str(file_path))
 
-    def test_build_initial_messages_includes_workspace_root(self):
-        app_env = AppEnv(
-            openai_api_key="key",
-            openai_model="model",
-            openai_base_url="http://localhost:8787/v1",
-            timeout_seconds=60.0,
-            max_tool_rounds=8,
-            context_window_override=None,
-            compaction_reserve_tokens=16384,
-            compaction_keep_recent_tokens=20000,
-            system_prompt="system prompt",
-            filter_terminal_log_level="none",
+    def test_context_output_uses_model_visible_history(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                UserMessage(content="old"),
+                UserMessage(content="active"),
+                AssistantMessage(content="hidden", visible_to_model=False),
+            ],
+            context_start_index=2,
         )
-        workspace = Path("/tmp/example-workspace")
 
-        messages = build_initial_messages(app_env, workspace)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_context(message_state.model_visible_history())
 
-        self.assertEqual(len(messages), 1)
-        self.assertIn("system prompt", messages[0].content)
-        self.assertIn("Current workspace root: /tmp/example-workspace", messages[0].content)
+        text = output.getvalue()
+        self.assertIn("sys", text)
+        self.assertIn("active", text)
+        self.assertNotIn("old", text)
+        self.assertNotIn("hidden", text)
 
     def test_trace_log_path_lives_under_ai_job_project_root(self):
-        self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
     def test_session_record_path_lives_under_ai_job_project_root(self):
-        self.assertEqual(
-            default_session_record_path(),
-            APP_ROOT / ".ai_job" / "sessions" / "sessions.md",
-        )
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                default_session_record_path(),
+                APP_ROOT / ".ai_job" / "sessions" / "sessions.md",
+            )
 
-    def test_main_starts_log_and_session_cleanup_after_configuration(self):
+    def test_trace_log_and_session_record_paths_can_be_overridden_by_environment(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_log_path = Path(tmp_dir) / "logs" / "log.log"
+            session_record_path = Path(tmp_dir) / "sessions" / "sessions.md"
+
+            with patch.dict(
+                os.environ,
+                {
+                    TRACE_LOG_PATH_ENV: str(trace_log_path),
+                    SESSION_RECORD_PATH_ENV: str(session_record_path),
+                },
+                clear=True,
+            ):
+                self.assertEqual(default_trace_log_path(), trace_log_path)
+                self.assertEqual(default_session_record_path(), session_record_path)
+
+    def test_main_starts_session_lifecycle_and_records_exit_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch.dict(
                 os.environ,
@@ -89,38 +111,75 @@ class ChatCliWorkspaceTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                with patch("ai_job.chat_cli.LogWrapper.configure") as log_configure_mock:
-                    with patch("ai_job.chat_cli.LogWrapper.cleanup_expired_logs_async") as log_cleanup_mock:
-                        with patch("ai_job.chat_cli.SessionRecorder.configure") as session_configure_mock:
-                            with patch(
-                                "ai_job.chat_cli.SessionRecorder.cleanup_expired_session_records_async"
-                            ) as session_cleanup_mock:
-                                with patch("ai_job.chat_cli.SessionRecorder.record_session") as record_session_mock:
-                                    with patch("ai_job.chat_cli.AgentRunner") as agent_runner_mock:
-                                        with patch("builtins.input", side_effect=EOFError):
-                                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                                                exit_code = main(["--workspace", tmp_dir])
+                runtime = SimpleNamespace(
+                    message_state=MessageState(history=[SystemMessage(content="system prompt")]),
+                    tool_registry=ToolRegistry([]),
+                    agent_runner=SimpleNamespace(run_turn=lambda _message_state: "unused"),
+                )
+                lifecycle = Mock()
+                with patch("ai_job.chat_cli.CliSessionLifecycle", return_value=lifecycle) as lifecycle_class_mock:
+                    with patch(
+                        "ai_job.chat_cli.create_cli_runtime",
+                        return_value=runtime,
+                    ) as create_runtime_mock:
+                        with patch("builtins.input", side_effect=EOFError):
+                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                exit_code = main(["--workspace", tmp_dir])
 
         self.assertEqual(exit_code, 0)
-        log_configure_mock.assert_called_once()
-        log_started_at = log_configure_mock.call_args.kwargs["session_started_at"]
-        log_cleanup_mock.assert_called_once_with()
-        session_configure_mock.assert_called_once()
-        self.assertEqual(session_configure_mock.call_args.kwargs["session_started_at"], log_started_at)
-        self.assertEqual(
-            session_configure_mock.call_args.kwargs["session_path"],
-            default_session_record_path(),
+        lifecycle_class_mock.assert_called_once_with(
+            trace_log_path=default_trace_log_path(),
+            session_record_path=default_session_record_path(),
         )
+        lifecycle.start.assert_called_once()
+        self.assertEqual(lifecycle.start.call_args.kwargs["workspace_root"], Path(tmp_dir).resolve())
+        lifecycle.record_initial_system_message.assert_called_once_with(runtime.message_state)
+        lifecycle.record_exit_snapshot.assert_called_once_with(runtime.message_state)
         self.assertEqual(
-            session_configure_mock.call_args.kwargs["metadata"]["workspace"],
-            str(Path(tmp_dir).resolve()),
+            lifecycle.start.call_args.kwargs["app_env"],
+            create_runtime_mock.call_args.kwargs["app_env"],
         )
-        session_cleanup_mock.assert_called_once_with()
-        record_session_mock.assert_called_once()
-        self.assertEqual(record_session_mock.call_args.args[0], "SystemMessage")
-        self.assertEqual(record_session_mock.call_args.args[2], "text")
-        self.assertIn("compression_manager", agent_runner_mock.call_args.kwargs)
-        self.assertIsNotNone(agent_runner_mock.call_args.kwargs["compression_manager"])
+        create_runtime_mock.assert_called_once()
+        self.assertEqual(
+            create_runtime_mock.call_args.kwargs["workspace_root"],
+            Path(tmp_dir).resolve(),
+        )
+        self.assertTrue(callable(create_runtime_mock.call_args.kwargs["request_protected_grep_approval"]))
+        self.assertTrue(create_runtime_mock.call_args.kwargs["include_compress_tool"])
+
+    def test_main_can_disable_compress_tool_registration(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "key",
+                    "OPENAI_MODEL": "model",
+                    "FILTER_TERMINAL_LOG_LEVEL": "none",
+                },
+                clear=True,
+            ):
+                runtime = SimpleNamespace(
+                    message_state=MessageState(history=[SystemMessage(content="system prompt")]),
+                    tool_registry=ToolRegistry([]),
+                    agent_runner=SimpleNamespace(run_turn=lambda _message_state: "unused"),
+                )
+                with patch("ai_job.chat_cli.CliSessionLifecycle", return_value=Mock()):
+                    with patch(
+                        "ai_job.chat_cli.create_cli_runtime",
+                        return_value=runtime,
+                    ) as create_runtime_mock:
+                        with patch("builtins.input", side_effect=EOFError):
+                            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                                exit_code = main(
+                                    [
+                                        "--workspace",
+                                        tmp_dir,
+                                        "--disable-compress-tool",
+                                    ]
+                                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(create_runtime_mock.call_args.kwargs["include_compress_tool"])
 
 
 if __name__ == "__main__":

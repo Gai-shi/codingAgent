@@ -171,7 +171,7 @@ OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Com
 OPENAI_API_KEY="你的 API Key"
 OPENAI_MODEL="你的模型名"
 OPENAI_BASE_URL="https://api.openai.com/v1"
-AI_JOB_TIMEOUT_SECONDS="60"
+AI_JOB_TIMEOUT_SECONDS="90"
 AI_JOB_MAX_TOOL_ROUNDS="8"
 AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
 FILTER_TERMINAL_LOG_LEVEL="debug"

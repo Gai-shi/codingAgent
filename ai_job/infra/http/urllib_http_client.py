@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from typing import Any
@@ -35,3 +36,5 @@ class UrlLibHttpClient(BaseHttpClient):
             raise HttpClientError(f"HTTP {exc.code}：{error_body}") from exc
         except urllib.error.URLError as exc:
             raise HttpClientError(str(exc.reason)) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise HttpClientError(f"request timed out after {timeout_seconds} seconds") from exc

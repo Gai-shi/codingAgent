@@ -57,6 +57,19 @@ class EnvFileLoaderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "不是文件"):
                 load_env_file(Path(tmp_dir))
 
+    def test_load_env_file_ignores_missing_file_and_rejects_non_utf8(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing_path = Path(tmp_dir) / ".env"
+            non_utf8_path = Path(tmp_dir) / "bad.env"
+            non_utf8_path.write_bytes(b"\xff")
+
+            with patch.dict(os.environ, {}, clear=True):
+                load_env_file(missing_path)
+                self.assertEqual(dict(os.environ), {})
+
+            with self.assertRaisesRegex(ValueError, "不是合法 UTF-8"):
+                load_env_file(non_utf8_path)
+
 
 class EnvLoaderTest(unittest.TestCase):
     def test_load_from_current_environment_returns_typed_app_env(self):
@@ -112,7 +125,7 @@ class EnvLoaderTest(unittest.TestCase):
             app_env = EnvLoader.load_from_current_environment()
 
         self.assertEqual(app_env.openai_base_url, "https://api.openai.com/v1")
-        self.assertEqual(app_env.timeout_seconds, 60.0)
+        self.assertEqual(app_env.timeout_seconds, 90.0)
         self.assertEqual(app_env.max_tool_rounds, 8)
         self.assertEqual(app_env.context_window_override, None)
         self.assertEqual(app_env.compaction_reserve_tokens, 16384)
@@ -154,6 +167,31 @@ class EnvLoaderTest(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "AI_JOB_CONTEXT_WINDOW 必须大于 0"):
+                EnvLoader.load_from_current_environment()
+
+    def test_load_from_current_environment_rejects_invalid_compaction_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "key",
+                "OPENAI_MODEL": "model",
+                "AI_JOB_COMPACTION_RESERVE_TOKENS": "many",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_COMPACTION_RESERVE_TOKENS 必须是整数"):
+                EnvLoader.load_from_current_environment()
+
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "key",
+                "OPENAI_MODEL": "model",
+                "AI_JOB_COMPACTION_KEEP_RECENT_TOKENS": "0",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AI_JOB_COMPACTION_KEEP_RECENT_TOKENS 必须大于 0"):
                 EnvLoader.load_from_current_environment()
 
 

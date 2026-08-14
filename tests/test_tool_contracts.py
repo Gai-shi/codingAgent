@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from ai_job.tools import BaseTool, ToolCall, ToolExecutor, ToolRegistry
+from ai_job.communication import AssistantMessage, MessageState, SystemMessage, ToolMessage, UserMessage
+from ai_job.tools import BaseTool, CompressTool, ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
 
 
 class SuccessfulTool(BaseTool):
@@ -40,6 +41,13 @@ class ToolContractsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate tool name"):
             ToolRegistry([SuccessfulTool(), SuccessfulTool()])
 
+    def test_tool_registry_rejects_empty_tool_name(self):
+        class EmptyNameTool(BaseTool):
+            name = ""
+
+        with self.assertRaisesRegex(ValueError, "tool name must not be empty"):
+            ToolRegistry([EmptyNameTool()])
+
     def test_tool_executor_returns_unknown_tool_error(self):
         executor = ToolExecutor(ToolRegistry([]))
 
@@ -61,3 +69,259 @@ class ToolContractsTest(unittest.TestCase):
         result = SuccessfulTool().execute("not a dict")
 
         self.assertEqual(result, "Error: invalid tool arguments: expected a JSON object")
+
+    def test_compress_tool_uses_model_visible_history(self):
+        old_tool_message = ToolMessage(tool_call_id="call-1", content="old result")
+        active_tool_message = ToolMessage(tool_call_id="call-1", content="active result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "old.txt"})
+                    ],
+                ),
+                old_tool_message,
+                UserMessage(content="active"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "active.txt"})
+                    ],
+                ),
+                active_tool_message,
+            ],
+            context_start_index=3,
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "active.txt"},
+                        "replace_content": "compressed active result",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(old_tool_message.compressions, [])
+        self.assertEqual(active_tool_message.compressions, ["compressed active result"])
+
+    def test_compress_tool_requires_context_and_valid_replacements(self):
+        result_without_context = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            }
+        )
+        result_without_replacements = CompressTool().execute(
+            {},
+            ToolExecutionContext(message_state=MessageState(history=[SystemMessage(content="sys")])),
+        )
+
+        self.assertEqual(
+            result_without_context,
+            "Error: compress_tool requires tool execution context",
+        )
+        self.assertIn('"replacements" must be a non-empty list', result_without_replacements)
+
+    def test_compress_tool_rejects_unknown_and_duplicate_tool_arguments(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "known.txt"})
+                    ],
+                ),
+                ToolMessage(tool_call_id="call-1", content="old result"),
+            ]
+        )
+        context = ToolExecutionContext(message_state=message_state)
+
+        unknown_result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "missing.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            context,
+        )
+        duplicate_result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short 1",
+                    },
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short 2",
+                    },
+                ]
+            },
+            context,
+        )
+
+        self.assertIn("no previous tool result matches read_file", unknown_result)
+        self.assertIn("duplicate tool_name/tool_arguments in replacements", duplicate_result)
+        self.assertEqual(message_state.history[2].compressions, [])
+
+    def test_compress_tool_accepts_namespaced_tool_name_alias(self):
+        tool_message = ToolMessage(tool_call_id="call-1", content="large result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "known.txt"})
+                    ],
+                ),
+                tool_message,
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "functions.read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(tool_message.compressions, ["short"])
+
+    def test_compress_tool_compresses_earlier_duplicate_argument_matches(self):
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-2", name="read_file", arguments={"path": "same.txt"}),
+                    ],
+                ),
+                ToolMessage(tool_call_id="call-1", content="first result"),
+                ToolMessage(tool_call_id="call-2", content="second result"),
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "same.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(message_state.history[2].compressions, ["short"])
+        self.assertEqual(message_state.history[3].compressions, [])
+
+    def test_compress_tool_keeps_last_uncompressed_duplicate_match(self):
+        first_tool_message = ToolMessage(
+            tool_call_id="call-1",
+            content="first result",
+            compressions=["already short"],
+        )
+        second_tool_message = ToolMessage(tool_call_id="call-2", content="second result")
+        third_tool_message = ToolMessage(tool_call_id="call-3", content="third result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-2", name="read_file", arguments={"path": "same.txt"}),
+                        ToolCall(id="call-3", name="read_file", arguments={"path": "same.txt"}),
+                    ],
+                ),
+                first_tool_message,
+                second_tool_message,
+                third_tool_message,
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "same.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(first_tool_message.compressions, ["already short"])
+        self.assertEqual(second_tool_message.compressions, ["short"])
+        self.assertEqual(third_tool_message.compressions, [])
+
+    def test_compress_tool_updates_single_already_compressed_match(self):
+        tool_message = ToolMessage(
+            tool_call_id="call-1",
+            content="large result",
+            compressions=["already short"],
+        )
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "known.txt"})
+                    ],
+                ),
+                tool_message,
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "new short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(tool_message.compressions, ["already short", "new short"])

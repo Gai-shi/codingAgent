@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -73,4 +74,12 @@ class UrlLibHttpClientTest(unittest.TestCase):
             side_effect=url_error,
         ):
             with self.assertRaisesRegex(HttpClientError, "connection refused"):
+                UrlLibHttpClient().post_json("http://example.test", {}, {}, 1.0)
+
+    def test_post_json_wraps_socket_timeout(self):
+        with patch(
+            "ai_job.infra.http.urllib_http_client.urllib.request.urlopen",
+            side_effect=socket.timeout("timed out"),
+        ):
+            with self.assertRaisesRegex(HttpClientError, "timed out after 1.0 seconds"):
                 UrlLibHttpClient().post_json("http://example.test", {}, {}, 1.0)
