@@ -44,13 +44,6 @@ else:
     from .grader import grade_target
 
 
-EVAL_SYSTEM_PROMPT = """You are a careful coding agent.
-When tool output is very long, actively preserve only the task-relevant facts needed for later steps.
-Do not keep bulky raw evidence in working context when a compact replacement is available.
-The user prompt is the source of task requirements; do not invent values that were not found in workspace evidence.
-Use tools when you need workspace information, then implement the smallest correct code change."""
-
-
 @dataclass(frozen=True)
 class SessionSection:
     title: str
@@ -95,14 +88,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=1.0)
     parser.add_argument("--no-progress", action="store_true")
-    parser.add_argument(
-        "--system-prompt",
-        default=EVAL_SYSTEM_PROMPT,
-        help=(
-            "System prompt used during the eval. The default is tool-neutral and "
-            "does not name compress_tool."
-        ),
-    )
     args = parser.parse_args(argv)
 
     output = Path(args.output).expanduser().resolve()
@@ -204,8 +189,6 @@ def _run_variant(
     source_root = str(Path(args.ai_job_source_root).expanduser().resolve())
     env["PYTHONPATH"] = source_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
-    if args.system_prompt:
-        env["AI_JOB_SYSTEM_PROMPT"] = args.system_prompt
 
     started_at = time.monotonic()
     completed = _run_command_with_progress(

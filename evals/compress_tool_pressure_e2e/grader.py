@@ -26,6 +26,16 @@ CONFLICT_EXPECTED_VALUES = {
     "compress-tool-preserved": "summary prefix",
     "elevated": "risk level",
     "2026-W33": "review window",
+    "audit-war-room": "escalation channel",
+    "iad-7": "primary region",
+    "pdx-2": "secondary region",
+    "contract-lock": "audit tag",
+    "manual-review": "audit tag",
+    "q4-retention": "audit tag",
+    "schema-freeze": "validation gate",
+    "marker-retention": "validation gate",
+    "audit-platform": "owner chain",
+    "release-ops": "owner chain",
 }
 CONFLICT_FORBIDDEN_VALUES = (
     "OBSOLETE_MARKER",
@@ -37,14 +47,25 @@ CONFLICT_FORBIDDEN_VALUES = (
 
 TRACE_EXPECTED_VALUES = {
     "open-manual-review": "action",
+    "quarantine-ledger-batch": "action",
+    "defer-audit-sync": "action",
     "ledger-quality": "owner",
+    "ledger-integrity": "owner",
+    "audit-quality": "owner",
+    "sev1": "severity",
     "sev2": "severity",
+    "sev3": "severity",
     "0": "retry delay",
+    "30": "retry delay",
     "blocked-on-ledger-review": "status",
+    "blocked-on-integrity-check": "status",
+    "deferred-for-audit-window": "status",
 }
 TRACE_FORBIDDEN_VALUES = (
     "retry-later",
     "legacy-retry",
+    "quarantine-shadow",
+    "defer-legacy-audit",
     "wrong-owner",
     "TRACE-OBSOLETE",
 )
@@ -104,11 +125,30 @@ expected = {
     "status": "ready-for-review",
     "risk_level": "elevated",
     "review_window": "2026-W33",
+    "escalation_channel": "audit-war-room",
 }
 for key, value in expected.items():
     assert report[key] == value
 assert report["summary"].startswith("compress-tool-preserved")
 assert "KEEP-COMPRESS-TOOL-9173" in report["summary"]
+assert report["regions"] == {"primary": "iad-7", "secondary": "pdx-2"}
+assert report["audit_tags"] == ["contract-lock", "manual-review", "q4-retention"]
+assert report["validation_gates"] == [
+    "schema-freeze",
+    "owner-ack",
+    "marker-retention",
+    "summary-prefix",
+]
+assert report["owner_chain"] == ["context-quality", "audit-platform", "release-ops"]
+assert report["blocking_conditions"] == [
+    "missing-owner-ack",
+    "marker-mismatch",
+    "policy-drift",
+]
+assert report["release_flags"] == {
+    "requires_manual_review": "yes",
+    "allow_legacy_policy": "no",
+}
 """,
     )
     if runtime_checks.returncode == 0:
@@ -165,6 +205,38 @@ assert confirmed == {
     "retry_after_minutes": "0",
     "status": "blocked-on-ledger-review",
     "marker": "TRACE-KEEP-4821",
+}
+
+quarantine = build_reconciliation_plan({
+    "tenant": "aurora-ledger",
+    "pipeline": "delta-sync",
+    "trace_id": "TRACE-QUARANTINE-7712",
+    "error_code": "E-CHECKSUM-7712",
+    "attempts": "1",
+})
+assert quarantine == {
+    "action": "quarantine-ledger-batch",
+    "owner": "ledger-integrity",
+    "severity": "sev1",
+    "retry_after_minutes": "0",
+    "status": "blocked-on-integrity-check",
+    "marker": "TRACE-QUARANTINE-7712",
+}
+
+audit = build_reconciliation_plan({
+    "tenant": "aurora-ledger",
+    "pipeline": "audit-sync",
+    "trace_id": "TRACE-AUDIT-3345",
+    "error_code": "E-AUDIT-LAG-3345",
+    "attempts": "2",
+})
+assert audit == {
+    "action": "defer-audit-sync",
+    "owner": "audit-quality",
+    "severity": "sev3",
+    "retry_after_minutes": "30",
+    "status": "deferred-for-audit-window",
+    "marker": "TRACE-AUDIT-3345",
 }
 
 other = build_reconciliation_plan({

@@ -12,14 +12,14 @@
 4. 主要指标是正确率提升：enabled 通过、disabled 失败、且 enabled 有有效压缩。
 5. 辅助指标是工具调用、上下文节省、耗时和分数差异。
 
-runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文压缩掩盖 `compress_tool` 的影响。同时 runner 会注入一段工具中立的 eval system prompt，要求 agent 主动管理很长的工具输出，但不点名 `compress_tool`。
+runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文压缩掩盖 `compress_tool` 的影响。runner 不注入额外 system prompt；enabled / disabled 的行为差异只来自 `compress_tool` 是否可用。
 
 ## Case
 
 当前套件有两个 case：
 
-- `conflict_contract_delay`：先读取长证据材料，材料里有多版冲突契约。下一轮禁止重新读取 evidence，要求实现 `auditor.report.build_report()`。隐藏 grader 检查最终契约是否来自有效 release/hotfix 记录。
-- `trace_debug_delay`：先读取长生产 trace 和状态机材料。下一轮禁止重新读取 evidence，要求修复 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查是否应用有效生产规则。
+- `conflict_contract_delay`：先读取长证据材料，材料里有多版冲突契约。下一轮禁止重新读取 evidence，要求实现 `auditor.report.build_report()`。隐藏 grader 检查最终契约、region、tag、gate、owner chain、blocking condition 和 release flag 的组合是否来自有效 release/hotfix 记录。
+- `trace_debug_delay`：先读取长生产 trace 和状态机材料。下一轮禁止重新读取 evidence，要求修复 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查 manual review、quarantine、audit defer 等多个有效生产规则。
 
 两个 case 都采用延迟记忆结构：长工具输出出现在第一轮，最终实现发生在第二轮。
 

@@ -14,7 +14,6 @@ from evals.compress_tool_pressure_e2e.benchmark_case import (
 )
 from evals.compress_tool_pressure_e2e.grader import grade_target
 from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
-    EVAL_SYSTEM_PROMPT,
     _compare,
     _summarize_suite,
     collect_run_diagnostics,
@@ -54,6 +53,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("TRACE-KEEP-4821", production_trace)
         self.assertIn("TRACE-OBSOLETE-0001", production_trace)
         self.assertIn("open-manual-review", notes)
+        self.assertIn("quarantine-ledger-batch", notes)
+        self.assertIn("defer-audit-sync", notes)
         self.assertIn('"action": "monitor"', decision)
 
     def test_prompts_do_not_name_compress_tool(self):
@@ -63,11 +64,6 @@ class CompressToolPressureE2ETest(unittest.TestCase):
 
             self.assertNotIn("compress_tool", joined)
             self.assertNotIn("压缩", joined)
-
-    def test_eval_system_prompt_is_tool_neutral(self):
-        self.assertNotIn("compress_tool", EVAL_SYSTEM_PROMPT)
-        self.assertNotIn("压缩", EVAL_SYSTEM_PROMPT)
-        self.assertIn("very long", EVAL_SYSTEM_PROMPT)
 
     def test_conflict_grader_accepts_exact_hidden_contract_and_rejects_unimplemented_fixture(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -83,7 +79,7 @@ class CompressToolPressureE2ETest(unittest.TestCase):
 from __future__ import annotations
 
 
-def build_report() -> dict[str, str]:
+def build_report() -> dict[str, object]:
     return {
         "title": "Q4-COMPRESS-AUDIT",
         "marker": "KEEP-COMPRESS-TOOL-9173",
@@ -93,6 +89,25 @@ def build_report() -> dict[str, str]:
         "summary": "compress-tool-preserved KEEP-COMPRESS-TOOL-9173",
         "risk_level": "elevated",
         "review_window": "2026-W33",
+        "escalation_channel": "audit-war-room",
+        "regions": {"primary": "iad-7", "secondary": "pdx-2"},
+        "audit_tags": ["contract-lock", "manual-review", "q4-retention"],
+        "validation_gates": [
+            "schema-freeze",
+            "owner-ack",
+            "marker-retention",
+            "summary-prefix",
+        ],
+        "owner_chain": ["context-quality", "audit-platform", "release-ops"],
+        "blocking_conditions": [
+            "missing-owner-ack",
+            "marker-mismatch",
+            "policy-drift",
+        ],
+        "release_flags": {
+            "requires_manual_review": "yes",
+            "allow_legacy_policy": "no",
+        },
     }
 ''',
                 encoding="utf-8",
@@ -122,11 +137,16 @@ from __future__ import annotations
 
 
 def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
+    try:
+        attempts = int(event.get("attempts", "0"))
+    except ValueError:
+        attempts = 0
+
     if (
         event.get("tenant") == "aurora-ledger"
         and event.get("pipeline") == "delta-sync"
         and event.get("error_code") == "E-RETRY-9173"
-        and int(event.get("attempts", "0")) >= 3
+        and attempts >= 3
     ):
         return {
             "action": "open-manual-review",
@@ -135,6 +155,34 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "retry_after_minutes": "0",
             "status": "blocked-on-ledger-review",
             "marker": event.get("trace_id", "TRACE-KEEP-4821"),
+        }
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "delta-sync"
+        and event.get("error_code") == "E-CHECKSUM-7712"
+        and attempts >= 1
+    ):
+        return {
+            "action": "quarantine-ledger-batch",
+            "owner": "ledger-integrity",
+            "severity": "sev1",
+            "retry_after_minutes": "0",
+            "status": "blocked-on-integrity-check",
+            "marker": event.get("trace_id", "TRACE-QUARANTINE-7712"),
+        }
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "audit-sync"
+        and event.get("error_code") == "E-AUDIT-LAG-3345"
+        and attempts >= 2
+    ):
+        return {
+            "action": "defer-audit-sync",
+            "owner": "audit-quality",
+            "severity": "sev3",
+            "retry_after_minutes": "30",
+            "status": "deferred-for-audit-window",
+            "marker": event.get("trace_id", "TRACE-AUDIT-3345"),
         }
     return {
         "action": "monitor",

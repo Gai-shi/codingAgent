@@ -292,8 +292,13 @@ These values are valid for auditor.report.build_report:
 - REQUIRED_MARKER = "KEEP-COMPRESS-TOOL-9173"
 - POLICY_CODE = "POLICY-COMPRESS-42"
 - RISK_LEVEL = "elevated"
+- ESCALATION_CHANNEL = "audit-war-room"
+- PRIMARY_REGION = "iad-7"
+- SECONDARY_REGION = "pdx-2"
+- AUDIT_TAGS = ["contract-lock", "manual-review", "q4-retention"]
+- VALIDATION_GATES = ["schema-freeze", "owner-ack", "marker-retention", "summary-prefix"]
 
-The implementation must expose build_report() -> dict[str, str].
+The implementation must expose build_report() -> dict[str, object].
 Do not copy OBSOLETE_MARKER, LEGACY_POLICY, DRAFT_STATUS, wrong-owner, or shadow-summary values.
 """
 
@@ -308,6 +313,9 @@ Valid override values:
 - FINAL_STATUS = "ready-for-review"
 - SUMMARY_PREFIX = "compress-tool-preserved"
 - REVIEW_WINDOW = "2026-W33"
+- OWNER_CHAIN = ["context-quality", "audit-platform", "release-ops"]
+- BLOCKING_CONDITIONS = ["missing-owner-ack", "marker-mismatch", "policy-drift"]
+- RELEASE_FLAGS = {{"requires_manual_review": "yes", "allow_legacy_policy": "no"}}
 
 Summary must start with SUMMARY_PREFIX and mention REQUIRED_MARKER.
 """
@@ -322,6 +330,9 @@ This block is intentionally plausible but invalid.
 - REQUIRED_MARKER = "OBSOLETE_MARKER_{index:04d}"
 - POLICY_CODE = "LEGACY_POLICY_{index:04d}"
 - RISK_LEVEL = "low"
+- ESCALATION_CHANNEL = "shadow-channel-{index:04d}"
+- PRIMARY_REGION = "legacy-{index:04d}"
+- AUDIT_TAGS = ["obsolete", "draft", "shadow"]
 
 Historical note:
 The old implementation returned a plain string, stored report data in JSON, and ignored the review window.
@@ -338,6 +349,9 @@ Candidate override values:
 - FINAL_STATUS = "DRAFT_STATUS_{index:04d}"
 - SUMMARY_PREFIX = "shadow-summary-{index:04d}"
 - REVIEW_WINDOW = "2025-W{index % 52:02d}"
+- OWNER_CHAIN = ["wrong-owner", "legacy-ops"]
+- BLOCKING_CONDITIONS = ["obsolete-blocker-{index:04d}"]
+- RELEASE_FLAGS = {{"requires_manual_review": "no", "allow_legacy_policy": "yes"}}
 
 This row resembles a final override, but it was superseded before release lock.
 """
@@ -349,7 +363,7 @@ def _conflict_report_py() -> str:
 from __future__ import annotations
 
 
-def build_report() -> dict[str, str]:
+def build_report() -> dict[str, object]:
     """Return the final audit report metadata."""
     return {}
 '''
@@ -376,11 +390,34 @@ class ReportShapeTest(unittest.TestCase):
             "summary",
             "risk_level",
             "review_window",
+            "escalation_channel",
+            "regions",
+            "audit_tags",
+            "validation_gates",
+            "owner_chain",
+            "blocking_conditions",
+            "release_flags",
         }
         self.assertEqual(set(report), required_keys)
-        for key in required_keys:
+        for key in {
+            "title",
+            "marker",
+            "policy_code",
+            "owner",
+            "status",
+            "summary",
+            "risk_level",
+            "review_window",
+            "escalation_channel",
+        }:
             self.assertIsInstance(report[key], str)
             self.assertTrue(report[key])
+        self.assertIsInstance(report["regions"], dict)
+        self.assertIsInstance(report["audit_tags"], list)
+        self.assertIsInstance(report["validation_gates"], list)
+        self.assertIsInstance(report["owner_chain"], list)
+        self.assertIsInstance(report["blocking_conditions"], list)
+        self.assertIsInstance(report["release_flags"], dict)
 
     def test_build_report_avoids_known_obsolete_prefixes(self):
         text = repr(build_report())
@@ -415,12 +452,20 @@ Interpretation rule:
 - Trace notes are noisy; only CONFIRMED_PRODUCTION_TRACE records are actionable.
 """,
         _trace_confirmed_incident_block("early"),
+        _trace_secondary_incident_block("early"),
+        _trace_audit_incident_block("early"),
     ]
     for index in range(1, noise_blocks + 1):
         blocks.append(_trace_noise_block(index))
         if index == max(1, noise_blocks // 2):
             blocks.append(_trace_confirmed_incident_block("middle"))
+        if index == max(1, noise_blocks // 4):
+            blocks.append(_trace_secondary_incident_block("middle"))
+        if index == max(1, (noise_blocks * 3) // 4):
+            blocks.append(_trace_audit_incident_block("middle"))
     blocks.append(_trace_confirmed_incident_block("late"))
+    blocks.append(_trace_secondary_incident_block("late"))
+    blocks.append(_trace_audit_incident_block("late"))
     return "\n\n".join(blocks) + "\n"
 
 
@@ -431,12 +476,20 @@ def _trace_state_machine_notes(*, noise_blocks: int) -> str:
 Only ACTIVE_STATE_RULE entries are valid. Candidate and rollback rules are examples from older incidents.
 """,
         _trace_active_rule_block("early"),
+        _trace_secondary_rule_block("early"),
+        _trace_audit_rule_block("early"),
     ]
     for index in range(1, noise_blocks + 1):
         blocks.append(_trace_rule_noise_block(index))
         if index == max(1, noise_blocks // 3):
             blocks.append(_trace_active_rule_block("middle"))
+        if index == max(1, noise_blocks // 5):
+            blocks.append(_trace_secondary_rule_block("middle"))
+        if index == max(1, (noise_blocks * 4) // 5):
+            blocks.append(_trace_audit_rule_block("middle"))
     blocks.append(_trace_active_rule_block("late"))
+    blocks.append(_trace_secondary_rule_block("late"))
+    blocks.append(_trace_audit_rule_block("late"))
     return "\n\n".join(blocks) + "\n"
 
 
@@ -448,6 +501,34 @@ trace_id = TRACE-KEEP-4821
 error_code = E-RETRY-9173
 attempts = 3
 observed_transition = queued -> validated -> retry_timeout -> manual_review_required
+release_channel = release-2026.08
+
+The trace_id must be preserved as the marker in the reconciliation plan.
+"""
+
+
+def _trace_secondary_incident_block(label: str) -> str:
+    return f"""[CONFIRMED_SECONDARY_TRACE::{label}]
+tenant = aurora-ledger
+pipeline = delta-sync
+trace_id = TRACE-QUARANTINE-7712
+error_code = E-CHECKSUM-7712
+attempts = 1
+observed_transition = queued -> validated -> checksum_mismatch -> quarantine_required
+release_channel = release-2026.08
+
+The trace_id must be preserved as the marker in the reconciliation plan.
+"""
+
+
+def _trace_audit_incident_block(label: str) -> str:
+    return f"""[CONFIRMED_AUDIT_TRACE::{label}]
+tenant = aurora-ledger
+pipeline = audit-sync
+trace_id = TRACE-AUDIT-3345
+error_code = E-AUDIT-LAG-3345
+attempts = 2
+observed_transition = queued -> audit_lag -> deferred_review_required
 release_channel = release-2026.08
 
 The trace_id must be preserved as the marker in the reconciliation plan.
@@ -472,6 +553,42 @@ Return plan values:
 """
 
 
+def _trace_secondary_rule_block(label: str) -> str:
+    return f"""[ACTIVE_QUARANTINE_RULE::{label}]
+Applies when:
+- tenant == "aurora-ledger"
+- pipeline == "delta-sync"
+- error_code == "E-CHECKSUM-7712"
+- attempts >= 1
+
+Return plan values:
+- action = "quarantine-ledger-batch"
+- owner = "ledger-integrity"
+- severity = "sev1"
+- retry_after_minutes = "0"
+- status = "blocked-on-integrity-check"
+- marker = trace_id
+"""
+
+
+def _trace_audit_rule_block(label: str) -> str:
+    return f"""[ACTIVE_AUDIT_RULE::{label}]
+Applies when:
+- tenant == "aurora-ledger"
+- pipeline == "audit-sync"
+- error_code == "E-AUDIT-LAG-3345"
+- attempts >= 2
+
+Return plan values:
+- action = "defer-audit-sync"
+- owner = "audit-quality"
+- severity = "sev3"
+- retry_after_minutes = "30"
+- status = "deferred-for-audit-window"
+- marker = trace_id
+"""
+
+
 def _trace_noise_block(index: int) -> str:
     return f"""[trace-replay-{index:04d}]
 trace_state = replay
@@ -492,6 +609,8 @@ def _trace_rule_noise_block(index: int) -> str:
 rule_state = ROLLED_BACK
 Candidate handling:
 - action = "retry-later"
+- alternate_action = "quarantine-shadow"
+- audit_action = "defer-legacy-audit"
 - owner = "wrong-owner"
 - severity = "sev4"
 - retry_after_minutes = "{15 + index % 45}"
