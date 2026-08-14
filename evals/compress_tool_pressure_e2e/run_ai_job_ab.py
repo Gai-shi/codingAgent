@@ -581,8 +581,12 @@ def _compress_replacements_from_section(section: SessionSection) -> list[tuple[s
             and isinstance(tool_arguments, dict)
             and isinstance(replace_content, str)
         ):
-            replacements.append((tool_name, _canonical_json(tool_arguments), replace_content))
+            replacements.append((_normalize_tool_name(tool_name), _canonical_json(tool_arguments), replace_content))
     return replacements
+
+
+def _normalize_tool_name(tool_name: str) -> str:
+    return tool_name.rsplit(".", 1)[-1]
 
 
 def _canonical_json(value: object) -> str:

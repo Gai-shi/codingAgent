@@ -184,6 +184,37 @@ class ToolContractsTest(unittest.TestCase):
         self.assertIn("duplicate tool_name/tool_arguments in replacements", duplicate_result)
         self.assertEqual(message_state.history[2].compressions, [])
 
+    def test_compress_tool_accepts_namespaced_tool_name_alias(self):
+        tool_message = ToolMessage(tool_call_id="call-1", content="large result")
+        message_state = MessageState(
+            history=[
+                SystemMessage(content="sys"),
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call-1", name="read_file", arguments={"path": "known.txt"})
+                    ],
+                ),
+                tool_message,
+            ]
+        )
+
+        result = CompressTool().execute(
+            {
+                "replacements": [
+                    {
+                        "tool_name": "functions.read_file",
+                        "tool_arguments": {"path": "known.txt"},
+                        "replace_content": "short",
+                    }
+                ]
+            },
+            ToolExecutionContext(message_state=message_state),
+        )
+
+        self.assertEqual(result, "Success")
+        self.assertEqual(tool_message.compressions, ["short"])
+
     def test_compress_tool_compresses_earlier_duplicate_argument_matches(self):
         message_state = MessageState(
             history=[

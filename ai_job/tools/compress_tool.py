@@ -144,7 +144,7 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
             )
 
         replacement = Replacement(
-            tool_name=tool_name,
+            tool_name=_normalize_tool_name(tool_name),
             tool_arguments=tool_arguments,
             replace_content=replace_content,
         )
@@ -158,6 +158,10 @@ def _parse_replacements(arguments: dict[str, Any]) -> list[Replacement]:
         replacements.append(replacement)
 
     return replacements
+
+
+def _normalize_tool_name(tool_name: str) -> str:
+    return tool_name.rsplit(".", 1)[-1]
 
 
 def _tool_message_targets_by_call_arguments(

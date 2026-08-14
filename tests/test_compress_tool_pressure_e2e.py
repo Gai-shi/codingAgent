@@ -213,6 +213,45 @@ Success
         self.assertEqual(diagnostics["successful_compress_replacement_chars"], 3)
         self.assertEqual(diagnostics["estimated_tool_context_chars_saved"], 23)
 
+    def test_diagnostics_estimates_saved_chars_for_namespaced_replacement_tool_name(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_path = Path(tmp_dir) / "session.md"
+            session_path.write_text(
+                """# Session
+
+## 10:00:01 ToolCall read_file
+
+```json
+{"id": "call-read", "name": "read_file", "arguments": {"path": "known.txt"}}
+```
+
+## 10:00:02 ToolResult read_file
+
+```text
+abcdefghijklmnopqrstuvwxyz
+```
+
+## 10:00:03 ToolCall compress_tool
+
+```json
+{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_name": "functions.read_file", "tool_arguments": {"path": "known.txt"}, "replace_content": "abc"}]}}
+```
+
+## 10:00:04 ToolResult compress_tool
+
+```text
+Success
+```
+""",
+                encoding="utf-8",
+            )
+            stdout = f"session_record: {session_path}\n"
+
+            diagnostics = collect_run_diagnostics(stdout, "")
+
+        self.assertEqual(diagnostics["compress_tool_success_count"], 1)
+        self.assertEqual(diagnostics["estimated_tool_context_chars_saved"], 23)
+
     def test_diagnostics_counts_large_tool_results_without_cross_section_regex_drift(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             session_path = Path(tmp_dir) / "session.md"
