@@ -267,12 +267,19 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
 def _conflict_contract_prompt_turns() -> list[PromptTurn]:
     return [
         PromptTurn(
-            kind="evidence_research",
-            text="""请先做证据调研。
+            kind="default_handoff_research",
+            text="""请先做默认交接包调研。
 
-请从 evidence/00_index.txt 开始，按材料内部的路由说明定位实现依据。
-材料里有默认交接包、候选包和纠偏说明；不要凭文件名直接猜最终来源。
-本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
+请从 evidence/00_index.txt 开始，只读取索引要求的默认 release 交接包。
+本轮不要跟进 post-lock route，不要读取 errata 或其他 evidence 文件。
+本轮不要修改文件，不要运行测试；读完只回复“默认包调研完成”，不要粘贴证据内容。""",
+        ),
+        PromptTurn(
+            kind="errata_research",
+            text="""刚才的默认交接包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
+
+请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效最终契约依据。
+本轮不要修改文件，不要运行测试；读完只回复“纠偏调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
             kind="implementation",
@@ -291,12 +298,19 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
 def _trace_debug_prompt_turns() -> list[PromptTurn]:
     return [
         PromptTurn(
-            kind="trace_research",
-            text="""请先做生产 trace 调研。
+            kind="default_trace_research",
+            text="""请先做默认 trace 交接包调研。
 
-请从 evidence/00_index.txt 开始，按材料内部的路由说明定位 active trace 依据。
-材料里有默认 triage 包、候选规则和纠偏说明；不要凭文件名直接猜最终来源。
-本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
+请从 evidence/00_index.txt 开始，只读取索引要求的默认 incident triage 包。
+本轮不要跟进 post-lock route，不要读取 errata 或其他 evidence 文件。
+本轮不要修改文件，不要运行测试；读完只回复“默认包调研完成”，不要粘贴证据内容。""",
+        ),
+        PromptTurn(
+            kind="trace_errata_research",
+            text="""刚才的默认 triage 包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
+
+请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效 active trace 依据。
+本轮不要修改文件，不要运行测试；读完只回复“纠偏调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
             kind="debug_fix",
