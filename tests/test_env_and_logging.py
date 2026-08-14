@@ -125,7 +125,7 @@ class EnvLoaderTest(unittest.TestCase):
             app_env = EnvLoader.load_from_current_environment()
 
         self.assertEqual(app_env.openai_base_url, "https://api.openai.com/v1")
-        self.assertEqual(app_env.timeout_seconds, 60.0)
+        self.assertEqual(app_env.timeout_seconds, 90.0)
         self.assertEqual(app_env.max_tool_rounds, 8)
         self.assertEqual(app_env.context_window_override, None)
         self.assertEqual(app_env.compaction_reserve_tokens, 16384)
