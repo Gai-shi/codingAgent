@@ -48,9 +48,12 @@ else:
 TOOL_POLICY_NEUTRAL = "neutral"
 TOOL_POLICY_GUIDED = "guided"
 TOOL_POLICIES = (TOOL_POLICY_NEUTRAL, TOOL_POLICY_GUIDED)
+AI_JOB_TRACE_LOG_PATH_ENV = "AI_JOB_TRACE_LOG_PATH"
+AI_JOB_SESSION_RECORD_PATH_ENV = "AI_JOB_SESSION_RECORD_PATH"
 
 GUIDED_COMPRESS_TOOL_HINT = """工具使用提示：
-当前环境提供 compress_tool。读取长 evidence 或发现之前读取的是 pre-lock/误导资料后，如果你已经抽取出后续需要保留的事实，可以自主调用 compress_tool，把已读的冗长工具输出替换成短摘要，再继续完成任务；是否调用由你判断。"""
+当前环境提供 compress_tool。读取长 evidence 或发现之前读取的是 pre-lock/误导资料后，如果你已经抽取出后续需要保留的事实，可以自主调用 compress_tool，把已读的冗长工具输出替换成短摘要，再继续完成任务；是否调用由你判断。
+如果调用 compress_tool，摘要要保留后续实现可能需要的 exact key/value、触发条件、默认/兜底分支、低显著字段、字段顺序/结构要求，以及哪些候选或旧事实已作废。不要只写结论性摘要。"""
 
 _RUN_LOG_LOCK = threading.Lock()
 _PROGRESS_LOCK = threading.Lock()
@@ -400,8 +403,12 @@ def _run_variant(
 
     env = os.environ.copy()
     source_root = str(Path(args.ai_job_source_root).expanduser().resolve())
+    trace_log_base_path = variant_dir / "ai_job_run" / "logs" / "log.log"
+    session_record_base_path = variant_dir / "ai_job_run" / "sessions" / "sessions.md"
     env["PYTHONPATH"] = source_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
+    env[AI_JOB_TRACE_LOG_PATH_ENV] = str(trace_log_base_path)
+    env[AI_JOB_SESSION_RECORD_PATH_ENV] = str(session_record_base_path)
 
     started_at = time.monotonic()
     label = f"{tool_policy}/{case_id}/{pressure}/{variant}"
@@ -439,6 +446,8 @@ def _run_variant(
         "exit_code": completed.returncode,
         "elapsed_seconds": elapsed_seconds,
         "target": str(target),
+        "trace_log_base_path": str(trace_log_base_path),
+        "session_record_base_path": str(session_record_base_path),
         "diagnostics": diagnostics,
         "grade": asdict(grade),
     }

@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 
 from ai_job.chat_cli import (
     APP_ROOT,
+    SESSION_RECORD_PATH_ENV,
+    TRACE_LOG_PATH_ENV,
     default_session_record_path,
     default_trace_log_path,
     main,
@@ -72,13 +74,31 @@ class ChatCliWorkspaceTest(unittest.TestCase):
         self.assertNotIn("hidden", text)
 
     def test_trace_log_path_lives_under_ai_job_project_root(self):
-        self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(default_trace_log_path(), APP_ROOT / ".ai_job" / "logs" / "log.log")
 
     def test_session_record_path_lives_under_ai_job_project_root(self):
-        self.assertEqual(
-            default_session_record_path(),
-            APP_ROOT / ".ai_job" / "sessions" / "sessions.md",
-        )
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                default_session_record_path(),
+                APP_ROOT / ".ai_job" / "sessions" / "sessions.md",
+            )
+
+    def test_trace_log_and_session_record_paths_can_be_overridden_by_environment(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_log_path = Path(tmp_dir) / "logs" / "log.log"
+            session_record_path = Path(tmp_dir) / "sessions" / "sessions.md"
+
+            with patch.dict(
+                os.environ,
+                {
+                    TRACE_LOG_PATH_ENV: str(trace_log_path),
+                    SESSION_RECORD_PATH_ENV: str(session_record_path),
+                },
+                clear=True,
+            ):
+                self.assertEqual(default_trace_log_path(), trace_log_path)
+                self.assertEqual(default_session_record_path(), session_record_path)
 
     def test_main_starts_session_lifecycle_and_records_exit_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

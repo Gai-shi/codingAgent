@@ -18,8 +18,8 @@ runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文�
 
 当前套件有两个 case：
 
-- `conflict_contract_delay`：第一轮只从 `evidence/00_index.txt` 进入默认 release 交接包，并刻意不跟进 post-lock route。第二轮用户指出默认包是 pre-lock 资料，要求按 route 读取 errata，再定位 legacy/draft archive 和 `final_contract_delta.txt`。第三轮禁止重新读取 evidence，要求实现 Python 3.9 兼容的 `auditor.report.build_report()`。隐藏 grader 检查最终契约、region、tag、gate、owner chain、blocking condition、release flag、handoff ticket、review signoff、rollback guard 和 control tag 的组合是否来自有效 release/hotfix 记录，并拒绝默认包/候选包值。
-- `trace_debug_delay`：第一轮只从 `evidence/00_index.txt` 进入默认 incident triage 包，并刻意不跟进 post-lock route。第二轮用户指出默认包是 pre-lock 资料，要求按 route 读取 errata，再定位 production archive、state rules 和 `active_trace_manifest.txt`。第三轮禁止重新读取 evidence，要求修复 Python 3.9 兼容的 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查 manual review、quarantine、audit defer、rule id、resolver group、audit tag、suppression 和默认 non-active 计划等多个有效生产规则，并拒绝默认 triage/候选规则值。
+- `conflict_contract_delay`：第一轮只从 `evidence/00_index.txt` 进入默认 release 交接包，并刻意不跟进 post-lock route。第二轮用户指出默认包是 pre-lock 资料，要求按 route 读取 errata，再按消歧 route 先检查候选/回滚长文件，再定位 legacy/draft archive 和 `final_contract_delta.txt`。第三轮禁止重新读取 evidence，要求实现 Python 3.9 兼容的 `auditor.report.build_report()`。隐藏 grader 检查最终契约、region、tag、gate、owner chain、blocking condition、release flag、handoff ticket、review signoff、rollback guard 和 control tag 的组合是否来自有效 release/hotfix 记录，并拒绝默认包/候选包值。
+- `trace_debug_delay`：第一轮只从 `evidence/00_index.txt` 进入默认 incident triage 包，并刻意不跟进 post-lock route。第二轮用户指出默认包是 pre-lock 资料，要求按 route 读取 errata，再按消歧 route 先检查 replay/candidate 长文件，再定位 production archive、state rules 和 `active_trace_manifest.txt`。第三轮禁止重新读取 evidence，要求修复 Python 3.9 兼容的 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查 manual review、quarantine、audit defer、rule id、resolver group、audit tag、suppression 和默认 non-active 计划等多个有效生产规则，并拒绝默认 triage/候选规则值。
 
 两个 case 都采用延迟记忆结构：误导长输出出现在第一轮，纠偏长输出出现在第二轮，最终实现发生在第三轮。
 
@@ -34,7 +34,7 @@ hard    高噪声，目标是 enabled 正确率高于 disabled
 all     依次运行 smoke、medium、hard
 ```
 
-旧参数 `--noise-blocks` 保留为兼容入口。传入后会覆盖当前 pressure 的默认噪声规模，主要用于临时调参。当前默认规模是 `smoke=12`、`medium=260`、`hard=1000`。
+旧参数 `--noise-blocks` 保留为兼容入口。传入后会覆盖当前 pressure 的默认噪声规模，主要用于临时调参。当前默认规模是 `smoke=12`、`medium=260`、`hard=1600`。
 
 ## 工具策略
 
@@ -58,6 +58,8 @@ python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
 ```
 
 runner 默认并行执行当前策略下的 enabled/disabled cell，`--max-workers` 默认是 4。终端默认只输出摘要、结果 JSON 路径和运行日志路径；完整 JSON 写入 `result_compress_tool_ab.json`，过程日志写入 `run_ai_job_ab.log`。需要实时终端进度时可显式加 `--progress`。
+
+并行运行时，runner 会为每个 variant 注入独立的 ai_job session/log 基准路径，避免多个 ai_job 进程在同一毫秒启动时把 `.ai_job/sessions` 或 `.ai_job/logs` 写到同一个文件，导致 enabled/disabled 诊断串台。
 
 运行带工具策略提示的 hard 档：
 

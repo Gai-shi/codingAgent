@@ -16,7 +16,7 @@ CASE_IDS = (CASE_CONFLICT_CONTRACT_DELAY, CASE_TRACE_DEBUG_DELAY)
 CASE_ID = CASE_CONFLICT_CONTRACT_DELAY
 
 DEFAULT_PRESSURE = "hard"
-DEFAULT_NOISE_BLOCKS = 1000
+DEFAULT_NOISE_BLOCKS = 1600
 PRESSURE_NOISE_BLOCKS = {
     "smoke": 12,
     "medium": 260,
@@ -278,7 +278,7 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
             kind="errata_research",
             text="""刚才的默认交接包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
 
-请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效最终契约依据。
+请回到默认包里看到的 route，读取对应 errata，并按 errata 的消歧 route 顺序定位有效最终契约依据，不要跳过 route 中要求检查的候选或回滚文件。
 本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认包事实已作废、后续实现只应保留哪些最终依据，不要粘贴长证据内容。""",
         ),
         PromptTurn(
@@ -310,14 +310,14 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
             kind="trace_errata_research",
             text="""刚才的默认 triage 包是 pre-lock 资料，现在需要按 post-lock route 纠偏。
 
-请回到默认包里看到的 route，读取对应 errata，并按 errata 定位有效 active trace 依据。
-本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认 triage 事实已作废、后续实现只应保留哪些 active 依据，不要粘贴长证据内容。""",
+请回到默认包里看到的 route，读取对应 errata，并按 errata 的消歧 route 顺序定位有效 trace 依据，不要跳过 route 中要求检查的候选或回滚文件；最终依据包括 active 规则和 non-active/default 输出契约。
+本轮不要修改文件，不要运行测试；读完后只给简短纠偏结论，明确哪些默认 triage 事实已作废、后续实现只应保留哪些 active 规则和 default 契约，不要粘贴长证据内容。""",
         ),
         PromptTurn(
             kind="debug_fix",
             text="""现在修复代码。
 
-不要重新读取 evidence 目录；直接使用上一轮 trace 调研得到的有效规则。
+不要重新读取 evidence 目录；直接使用上一轮 trace 调研得到的有效规则和 non-active/default 输出契约。
 请读取 README.md、reconciler/decision.py 和 tests/，然后修复 build_reconciliation_plan()。
 不要使用废弃、候选、回滚或错误 owner 的处理规则。
 目标运行时是 Python 3.9；不要使用 `str | list[str]` 这类 Python 3.10+ 类型语法或依赖 Python 3.10 的类型别名。
@@ -432,10 +432,12 @@ def _conflict_errata_index() -> str:
 
 This errata index supersedes evidence/01_default_release_packet.txt.
 
-Active route, in order:
-1. legacy_contract_archive.txt recovers the locked baseline contract.
-2. draft_release_notes.txt recovers the active hotfix override rows.
-3. final_contract_delta.txt identifies which archive and hotfix facts survive post-lock review.
+Disambiguation route, in order:
+1. release_candidate_delta.txt captures the withdrawn candidate handoff; inspect it first so candidate values can be explicitly rejected.
+2. hotfix_shadow_matrix.txt captures rollback rehearsals; inspect it second so shadow hotfix values can be explicitly rejected.
+3. legacy_contract_archive.txt recovers the locked baseline contract.
+4. draft_release_notes.txt recovers the active hotfix override rows.
+5. final_contract_delta.txt identifies which archive and hotfix facts survive post-lock review.
 
 Withdrawn or investigation-only files:
 - release_candidate_delta.txt is a candidate delta from the default handoff.
@@ -923,10 +925,12 @@ def _trace_errata_index() -> str:
 
 This errata index supersedes evidence/01_incident_triage_packet.log.
 
-Active route, in order:
-1. incident_trace_archive.log recovers the locked production traces.
-2. state_machine_notes.txt recovers the active state rules.
-3. active_trace_manifest.txt identifies which trace ids and state rules survive post-lock review.
+Disambiguation route, in order:
+1. replay_analysis_manifest.txt captures withdrawn replay analysis; inspect it first so replay values can be explicitly rejected.
+2. state_machine_candidate_notes.txt captures rollback/candidate state rules; inspect it second so candidate state values can be explicitly rejected.
+3. incident_trace_archive.log recovers the locked production traces.
+4. state_machine_notes.txt recovers the active state rules.
+5. active_trace_manifest.txt identifies which trace ids and state rules survive post-lock review.
 
 Withdrawn or investigation-only files:
 - replay_analysis_manifest.txt describes replay analysis and candidate handling.
@@ -960,7 +964,7 @@ Final composition requirement:
 - Active plans must include queue, runbook, escalation_channel, sla, evidence_hash, and decision_flags.
 - Non-matching events should keep a non-active default action and preserve the incoming trace_id as marker.
 - Active plans must also preserve rule_id, resolver_group, audit_tags, and suppressions for each final rule.
-- The default non-active plan must preserve default_status_code = "NO_ACTIVE_RULE" and default_owner_chain = ["triage", "ledger-watch"].
+- The default non-active plan must preserve action = "monitor", owner = "triage", severity = "sev4", retry_after_minutes = "15", status = "watching", queue = "triage-watch", runbook = "rb-triage-default", escalation_channel = "#triage", sla = "PT15M", evidence_hash = "sha256:default-monitor", decision_flags = ["default", "non-active"], rule_id = "rule-default-monitor", resolver_group = "triage/oncall", audit_tags = ["default", "non-active"], suppressions = ["active-only"], default_status_code = "NO_ACTIVE_RULE", and default_owner_chain = ["triage", "ledger-watch"].
 """
 
 

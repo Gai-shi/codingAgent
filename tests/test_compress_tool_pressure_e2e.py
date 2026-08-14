@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import threading
 import tempfile
 import unittest
@@ -18,7 +19,10 @@ from evals.compress_tool_pressure_e2e.benchmark_case import (
     prompt_stats,
 )
 from evals.compress_tool_pressure_e2e.grader import grade_target
+from evals.compress_tool_pressure_e2e.grader import GradeResult
 from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
+    AI_JOB_SESSION_RECORD_PATH_ENV,
+    AI_JOB_TRACE_LOG_PATH_ENV,
     GUIDED_COMPRESS_TOOL_HINT,
     TOOL_POLICY_GUIDED,
     TOOL_POLICY_NEUTRAL,
@@ -26,6 +30,7 @@ from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
     _compare,
     _effective_prompt_texts,
     _format_run_summary,
+    _run_variant,
     _run_variant_tasks,
     _summarize_policy_results,
     _summarize_suite,
@@ -55,6 +60,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("01_default_release_packet.txt", index)
         self.assertIn("ERRATA_ROUTE = evidence/97_contract_errata_index.txt", default_packet)
         self.assertIn("legacy_contract_archive.txt", errata)
+        self.assertIn("release_candidate_delta.txt captures the withdrawn candidate handoff", errata)
+        self.assertIn("hotfix_shadow_matrix.txt captures rollback rehearsals", errata)
         self.assertIn("KEEP-COMPRESS-TOOL-9173", decisions)
         self.assertIn("OBSOLETE_MARKER_0001", decisions)
         self.assertIn("compress-tool-preserved", overrides)
@@ -91,6 +98,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("01_incident_triage_packet.log", index)
         self.assertIn("ERRATA_ROUTE = evidence/97_trace_errata_index.txt", triage)
         self.assertIn("incident_trace_archive.log", errata)
+        self.assertIn("replay_analysis_manifest.txt captures withdrawn replay analysis", errata)
+        self.assertIn("state_machine_candidate_notes.txt captures rollback/candidate state rules", errata)
         self.assertIn("TRACE-KEEP-4821", production_trace)
         self.assertIn("TRACE-OBSOLETE-0001", production_trace)
         self.assertIn("open-manual-review", notes)
@@ -135,7 +144,17 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertNotIn("compress_tool", "\n".join(guided_disabled))
         self.assertIn(GUIDED_COMPRESS_TOOL_HINT, guided_enabled[0])
         self.assertIn("compress_tool", "\n".join(guided_enabled))
+        self.assertIn("默认/兜底分支", "\n".join(guided_enabled))
+        self.assertIn("低显著字段", "\n".join(guided_enabled))
         self.assertEqual(len(guided_enabled), len(turns))
+
+    def test_trace_prompts_preserve_default_contract_as_valid_evidence(self):
+        turns = build_prompt_turns(case_id=CASE_TRACE_DEBUG_DELAY, pressure="hard")
+        joined = "\n".join(turn.text for turn in turns)
+
+        self.assertIn("non-active/default 输出契约", joined)
+        self.assertIn("active 规则和 default 契约", joined)
+        self.assertIn("不要跳过 route 中要求检查的候选或回滚文件", joined)
 
     def test_conflict_grader_accepts_exact_hidden_contract_and_rejects_unimplemented_fixture(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -349,6 +368,168 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
 
         self.assertTrue(passed.passed, passed)
 
+    def test_trace_grader_accepts_stable_shape_active_plan_fields(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = create_case_workspace(
+                Path(tmp_dir),
+                force=True,
+                noise_blocks=1,
+                case_id=CASE_TRACE_DEBUG_DELAY,
+            )
+
+            (target / "reconciler" / "decision.py").write_text(
+                '''"""Build reconciliation plans for production trace events."""
+
+from __future__ import annotations
+
+
+def _active_plan(
+    event: dict[str, str],
+    *,
+    action: str,
+    owner: str,
+    severity: str,
+    retry_after_minutes: str,
+    status: str,
+    queue: str,
+    runbook: str,
+    escalation_channel: str,
+    sla: str,
+    evidence_hash: str,
+    decision_flags: list[str],
+    rule_id: str,
+    resolver_group: str,
+    audit_tags: list[str],
+    suppressions: list[str],
+) -> dict[str, object]:
+    return {
+        "action": action,
+        "owner": owner,
+        "severity": severity,
+        "retry_after_minutes": retry_after_minutes,
+        "status": status,
+        "marker": event.get("trace_id", ""),
+        "queue": queue,
+        "runbook": runbook,
+        "escalation_channel": escalation_channel,
+        "sla": sla,
+        "evidence_hash": evidence_hash,
+        "decision_flags": decision_flags,
+        "rule_id": rule_id,
+        "resolver_group": resolver_group,
+        "audit_tags": audit_tags,
+        "suppressions": suppressions,
+        "default_status_code": "",
+        "default_owner_chain": [],
+    }
+
+
+def build_reconciliation_plan(event: dict[str, str]) -> dict[str, object]:
+    try:
+        attempts = int(event.get("attempts", "0"))
+    except ValueError:
+        attempts = 0
+
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "delta-sync"
+        and event.get("error_code") == "E-RETRY-9173"
+        and attempts >= 3
+    ):
+        return _active_plan(
+            event,
+            action="open-manual-review",
+            owner="ledger-quality",
+            severity="sev2",
+            retry_after_minutes="0",
+            status="blocked-on-ledger-review",
+            queue="ledger-manual-review",
+            runbook="rb-ledger-9173",
+            escalation_channel="#ledger-quality",
+            sla="PT0M",
+            evidence_hash="sha256:trace-keep-4821",
+            decision_flags=["manual-review", "retain-marker", "block-ledger"],
+            rule_id="rule-ledger-9173",
+            resolver_group="ledger-quality/oncall",
+            audit_tags=["manual-review", "retry-threshold", "release-2026.08"],
+            suppressions=["auto-retry", "candidate-replay"],
+        )
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "delta-sync"
+        and event.get("error_code") == "E-CHECKSUM-7712"
+        and attempts >= 1
+    ):
+        return _active_plan(
+            event,
+            action="quarantine-ledger-batch",
+            owner="ledger-integrity",
+            severity="sev1",
+            retry_after_minutes="0",
+            status="blocked-on-integrity-check",
+            queue="ledger-quarantine",
+            runbook="rb-ledger-7712",
+            escalation_channel="#ledger-integrity",
+            sla="PT0M",
+            evidence_hash="sha256:trace-quarantine-7712",
+            decision_flags=["quarantine", "checksum", "block-ledger"],
+            rule_id="rule-ledger-7712",
+            resolver_group="ledger-integrity/oncall",
+            audit_tags=["quarantine", "checksum", "release-2026.08"],
+            suppressions=["partial-replay", "candidate-quarantine"],
+        )
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "audit-sync"
+        and event.get("error_code") == "E-AUDIT-LAG-3345"
+        and attempts >= 2
+    ):
+        return _active_plan(
+            event,
+            action="defer-audit-sync",
+            owner="audit-quality",
+            severity="sev3",
+            retry_after_minutes="30",
+            status="deferred-for-audit-window",
+            queue="audit-defer",
+            runbook="rb-audit-3345",
+            escalation_channel="#audit-quality",
+            sla="PT30M",
+            evidence_hash="sha256:trace-audit-3345",
+            decision_flags=["audit-defer", "windowed", "retain-marker"],
+            rule_id="rule-audit-3345",
+            resolver_group="audit-quality/oncall",
+            audit_tags=["audit-defer", "windowed", "release-2026.08"],
+            suppressions=["legacy-audit-retry", "candidate-audit"],
+        )
+    return {
+        "action": "monitor",
+        "owner": "triage",
+        "severity": "baseline",
+        "retry_after_minutes": "15",
+        "status": "watching",
+        "marker": event.get("trace_id", ""),
+        "queue": "triage-watch",
+        "runbook": "rb-triage-default",
+        "escalation_channel": "#triage",
+        "sla": "PT15M",
+        "evidence_hash": "sha256:default-monitor",
+        "decision_flags": ["default", "non-active"],
+        "rule_id": "rule-default-monitor",
+        "resolver_group": "triage/oncall",
+        "audit_tags": ["default", "non-active"],
+        "suppressions": ["active-only"],
+        "default_status_code": "NO_ACTIVE_RULE",
+        "default_owner_chain": ["triage", "ledger-watch"],
+    }
+''',
+                encoding="utf-8",
+            )
+
+            passed = grade_target(target)
+
+        self.assertTrue(passed.passed, passed)
+
     def test_prompt_stats_reports_case_pressure_and_compatible_noise_size(self):
         turns = []
 
@@ -360,7 +541,7 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         self.assertGreater(stats["evidence_chars"], len(noisy_evidence_text(noise_blocks=2)))
 
     def test_default_hard_noise_blocks_is_high_pressure(self):
-        self.assertEqual(DEFAULT_NOISE_BLOCKS, 1000)
+        self.assertEqual(DEFAULT_NOISE_BLOCKS, 1600)
 
     def test_diagnostics_count_compress_tool_usage_and_estimated_saved_chars(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -703,6 +884,67 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertIn("run_log: /tmp/run.log", text)
         self.assertIn("enabled_success_rate=1.0", text)
         self.assertNotIn("policy_results", text)
+
+    def test_run_variant_isolates_ai_job_session_and_log_paths_per_variant(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "cell"
+            turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="smoke")
+            task = VariantTask(
+                output=output,
+                turns=turns,
+                variant="enabled",
+                disable_compress_tool=False,
+                case_id=CASE_CONFLICT_CONTRACT_DELAY,
+                pressure="smoke",
+                tool_policy=TOOL_POLICY_NEUTRAL,
+            )
+            args = SimpleNamespace(
+                noise_blocks=1,
+                ai_job_command="python3 -m ai_job",
+                ai_job_source_root=Path(tmp_dir) / "source",
+                auto_compression_context_window=123456,
+                timeout_seconds=30,
+                progress_interval_seconds=5,
+                no_progress=True,
+            )
+            captured_env: dict[str, str] = {}
+
+            def fake_run_command(cmd, *, env, **_kwargs):
+                captured_env.update(env)
+                session_base = Path(env[AI_JOB_SESSION_RECORD_PATH_ENV])
+                log_base = Path(env[AI_JOB_TRACE_LOG_PATH_ENV])
+                session_path = session_base.with_name("sessions-20260814-171609-681.md")
+                log_path = log_base.with_name("log-20260814-171609-681.log")
+                session_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                session_path.write_text("# Session\n", encoding="utf-8")
+                log_path.write_text("", encoding="utf-8")
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"log_file: {log_path}\nsession_record: {session_path}\n",
+                    stderr="",
+                )
+
+            with mock.patch(
+                "evals.compress_tool_pressure_e2e.run_ai_job_ab._run_command_with_progress",
+                side_effect=fake_run_command,
+            ):
+                with mock.patch(
+                    "evals.compress_tool_pressure_e2e.run_ai_job_ab.grade_target",
+                    return_value=GradeResult(passed=False, score=0),
+                ):
+                    result = _run_variant(args, task, io.StringIO())
+
+        variant_dir = output / "enabled"
+        expected_session_base = variant_dir / "ai_job_run" / "sessions" / "sessions.md"
+        expected_log_base = variant_dir / "ai_job_run" / "logs" / "log.log"
+        self.assertEqual(captured_env[AI_JOB_SESSION_RECORD_PATH_ENV], str(expected_session_base))
+        self.assertEqual(captured_env[AI_JOB_TRACE_LOG_PATH_ENV], str(expected_log_base))
+        self.assertEqual(result["session_record_base_path"], str(expected_session_base))
+        self.assertEqual(result["trace_log_base_path"], str(expected_log_base))
+        self.assertTrue(str(result["diagnostics"]["session_record"]).startswith(str(expected_session_base.parent)))
+        self.assertTrue(str(result["diagnostics"]["log_file"]).startswith(str(expected_log_base.parent)))
 
     def test_run_variant_tasks_uses_thread_pool_workers(self):
         barrier = threading.Barrier(2)

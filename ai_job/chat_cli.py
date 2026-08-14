@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -36,6 +37,8 @@ APP_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE_PATH = APP_ROOT / ".env"
 DEFAULT_TRACE_LOG_PATH = APP_ROOT / ".ai_job" / "logs" / "log.log"
 DEFAULT_SESSION_RECORD_PATH = APP_ROOT / ".ai_job" / "sessions" / "sessions.md"
+TRACE_LOG_PATH_ENV = "AI_JOB_TRACE_LOG_PATH"
+SESSION_RECORD_PATH_ENV = "AI_JOB_SESSION_RECORD_PATH"
 
 
 def enable_line_editing() -> None:
@@ -73,11 +76,18 @@ def resolve_workspace_root(path_text: Optional[str]) -> Path:
 
 
 def default_trace_log_path() -> Path:
-    return DEFAULT_TRACE_LOG_PATH
+    return _path_from_env(TRACE_LOG_PATH_ENV, DEFAULT_TRACE_LOG_PATH)
 
 
 def default_session_record_path() -> Path:
-    return DEFAULT_SESSION_RECORD_PATH
+    return _path_from_env(SESSION_RECORD_PATH_ENV, DEFAULT_SESSION_RECORD_PATH)
+
+
+def _path_from_env(name: str, default: Path) -> Path:
+    raw_path = os.getenv(name)
+    if raw_path is None or raw_path.strip() == "":
+        return default
+    return Path(raw_path).expanduser()
 
 
 def create_protected_grep_approval(workspace_root: Path) -> Callable[[Path], bool]:
