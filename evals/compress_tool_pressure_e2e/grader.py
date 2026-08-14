@@ -60,6 +60,16 @@ CONFLICT_EXPECTED_VALUES = {
     "2026-08-14T09:00Z": "deadline",
     "2026-08-15T12:00Z": "deadline",
     "2026-08-16T18:00Z": "deadline",
+    "HND-9173-W33": "handoff ticket",
+    "sig-context-9173": "review signoff",
+    "sig-release-42": "review signoff",
+    "sig-audit-771": "review signoff",
+    "deny-legacy-policy": "rollback guard",
+    "block-shadow-render": "rollback guard",
+    "freeze-marker": "rollback guard",
+    "sox-audit": "control tag",
+    "retention-critical": "control tag",
+    "post-lock": "control tag",
 }
 CONFLICT_FORBIDDEN_VALUES = (
     "OBSOLETE_MARKER",
@@ -78,6 +88,10 @@ CONFLICT_FORBIDDEN_VALUES = (
     "fp-candidate-1107",
     "candidate-rfc-1107",
     "candidate-policy-loader",
+    "HND-CANDIDATE",
+    "HND-OBSOLETE",
+    "allow-shadow-summary",
+    "shadow-signoff",
 )
 
 TRACE_EXPECTED_VALUES = {
@@ -113,6 +127,23 @@ TRACE_EXPECTED_VALUES = {
     "block-ledger": "decision flag",
     "checksum": "decision flag",
     "windowed": "decision flag",
+    "rule-ledger-9173": "rule id",
+    "rule-ledger-7712": "rule id",
+    "rule-audit-3345": "rule id",
+    "ledger-quality/oncall": "resolver group",
+    "ledger-integrity/oncall": "resolver group",
+    "audit-quality/oncall": "resolver group",
+    "retry-threshold": "audit tag",
+    "release-2026.08": "audit tag",
+    "auto-retry": "suppression",
+    "candidate-replay": "suppression",
+    "partial-replay": "suppression",
+    "candidate-quarantine": "suppression",
+    "legacy-audit-retry": "suppression",
+    "candidate-audit": "suppression",
+    "rule-default-monitor": "default rule id",
+    "NO_ACTIVE_RULE": "default status code",
+    "ledger-watch": "default owner chain",
 }
 TRACE_FORBIDDEN_VALUES = (
     "retry-later",
@@ -128,6 +159,10 @@ TRACE_FORBIDDEN_VALUES = (
     "candidate-retry-queue",
     "rb-candidate-retry",
     "sha256:candidate-triage",
+    "rule-candidate",
+    "rule-obsolete",
+    "triage-desk/oncall",
+    "wrong-owner/oncall",
 )
 
 
@@ -236,6 +271,14 @@ assert report["release_flags"] == {
     "requires_manual_review": "yes",
     "allow_legacy_policy": "no",
 }
+assert report["handoff_ticket"] == "HND-9173-W33"
+assert report["review_signoffs"] == ["sig-context-9173", "sig-release-42", "sig-audit-771"]
+assert report["rollback_guards"] == [
+    "deny-legacy-policy",
+    "block-shadow-render",
+    "freeze-marker",
+]
+assert report["control_tags"] == ["sox-audit", "retention-critical", "post-lock"]
 """,
     )
     if runtime_checks.returncode == 0:
@@ -298,6 +341,10 @@ assert confirmed == {
     "sla": "PT0M",
     "evidence_hash": "sha256:trace-keep-4821",
     "decision_flags": ["manual-review", "retain-marker", "block-ledger"],
+    "rule_id": "rule-ledger-9173",
+    "resolver_group": "ledger-quality/oncall",
+    "audit_tags": ["manual-review", "retry-threshold", "release-2026.08"],
+    "suppressions": ["auto-retry", "candidate-replay"],
 }
 
 quarantine = build_reconciliation_plan({
@@ -320,6 +367,10 @@ assert quarantine == {
     "sla": "PT0M",
     "evidence_hash": "sha256:trace-quarantine-7712",
     "decision_flags": ["quarantine", "checksum", "block-ledger"],
+    "rule_id": "rule-ledger-7712",
+    "resolver_group": "ledger-integrity/oncall",
+    "audit_tags": ["quarantine", "checksum", "release-2026.08"],
+    "suppressions": ["partial-replay", "candidate-quarantine"],
 }
 
 audit = build_reconciliation_plan({
@@ -342,6 +393,10 @@ assert audit == {
     "sla": "PT30M",
     "evidence_hash": "sha256:trace-audit-3345",
     "decision_flags": ["audit-defer", "windowed", "retain-marker"],
+    "rule_id": "rule-audit-3345",
+    "resolver_group": "audit-quality/oncall",
+    "audit_tags": ["audit-defer", "windowed", "release-2026.08"],
+    "suppressions": ["legacy-audit-retry", "candidate-audit"],
 }
 
 other = build_reconciliation_plan({
@@ -353,6 +408,9 @@ other = build_reconciliation_plan({
 })
 assert other["marker"] == "TRACE-OTHER"
 assert other["action"] != "open-manual-review"
+assert other["rule_id"] == "rule-default-monitor"
+assert other["default_status_code"] == "NO_ACTIVE_RULE"
+assert other["default_owner_chain"] == ["triage", "ledger-watch"]
 """,
     )
     if runtime_checks.returncode == 0:

@@ -16,7 +16,7 @@ CASE_IDS = (CASE_CONFLICT_CONTRACT_DELAY, CASE_TRACE_DEBUG_DELAY)
 CASE_ID = CASE_CONFLICT_CONTRACT_DELAY
 
 DEFAULT_PRESSURE = "hard"
-DEFAULT_NOISE_BLOCKS = 760
+DEFAULT_NOISE_BLOCKS = 1000
 PRESSURE_NOISE_BLOCKS = {
     "smoke": 12,
     "medium": 260,
@@ -288,6 +288,7 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
 不要重新读取 evidence 目录；直接使用上一轮证据调研得到的有效最终契约。
 请读取 README.md、auditor/report.py 和 tests/，然后实现 auditor/report.py 里的 build_report()。
 不要使用废弃、候选、回滚或错误 owner 的值。
+目标运行时是 Python 3.9；不要使用 `str | list[str]` 这类 Python 3.10+ 类型语法或依赖 Python 3.10 的类型别名。
 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
 完成后简要说明改了哪些文件。""",
@@ -319,6 +320,7 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
 不要重新读取 evidence 目录；直接使用上一轮 trace 调研得到的有效规则。
 请读取 README.md、reconciler/decision.py 和 tests/，然后修复 build_reconciliation_plan()。
 不要使用废弃、候选、回滚或错误 owner 的处理规则。
+目标运行时是 Python 3.9；不要使用 `str | list[str]` 这类 Python 3.10+ 类型语法或依赖 Python 3.10 的类型别名。
 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
 完成后简要说明改了哪些文件。""",
@@ -465,6 +467,7 @@ Final composition requirement:
 - summary must start with "compress-tool-preserved" and mention "KEEP-COMPRESS-TOOL-9173".
 - regions must be {"primary": "iad-7", "secondary": "pdx-2"}.
 - routing_keys, audit_tags, validation_gates, owner_chain, approval_chain, runbook_steps, watchlist, notification_channels, blocking_conditions, deadline_matrix, and release_flags must preserve the active record ordering.
+- handoff_ticket, review_signoffs, rollback_guards, and control_tags are low-salience final fields; they must be preserved exactly.
 """
 
 
@@ -565,6 +568,7 @@ These values are valid for auditor.report.build_report:
 - EVIDENCE_CHECKSUMS = {{"core": "sha256:ccdl-core-9173", "override": "sha256:hotfix-42-w33", "delta": "sha256:delta-final-771"}}
 - AUDIT_TAGS = ["contract-lock", "manual-review", "q4-retention"]
 - VALIDATION_GATES = ["schema-freeze", "owner-ack", "marker-retention", "summary-prefix"]
+- CONTROL_TAGS = ["sox-audit", "retention-critical", "post-lock"]
 
 The implementation must expose build_report() -> dict[str, object].
 Do not copy OBSOLETE_MARKER, LEGACY_POLICY, DRAFT_STATUS, wrong-owner, or shadow-summary values.
@@ -589,6 +593,9 @@ Valid override values:
 - DEADLINE_MATRIX = {{"owner_ack": "2026-08-14T09:00Z", "schema_freeze": "2026-08-15T12:00Z", "release_gate": "2026-08-16T18:00Z"}}
 - BLOCKING_CONDITIONS = ["missing-owner-ack", "marker-mismatch", "policy-drift"]
 - RELEASE_FLAGS = {{"requires_manual_review": "yes", "allow_legacy_policy": "no"}}
+- HANDOFF_TICKET = "HND-9173-W33"
+- REVIEW_SIGNOFFS = ["sig-context-9173", "sig-release-42", "sig-audit-771"]
+- ROLLBACK_GUARDS = ["deny-legacy-policy", "block-shadow-render", "freeze-marker"]
 
 Summary must start with SUMMARY_PREFIX and mention REQUIRED_MARKER.
 """
@@ -629,6 +636,9 @@ This row repeats the pre-lock default path and looks valid until the packet foot
 - PRIMARY_REGION = "iad-3"
 - SECONDARY_REGION = "pdx-1"
 - RELEASE_FLAGS = {{"requires_manual_review": "no", "allow_legacy_policy": "candidate"}}
+- HANDOFF_TICKET = "HND-CANDIDATE-1107"
+- REVIEW_SIGNOFFS = ["candidate-signoff"]
+- ROLLBACK_GUARDS = ["allow-shadow-summary"]
 
 This row was superseded by the post-lock route marker near the end of the packet.
 """
@@ -665,6 +675,8 @@ status = candidate-ready
 summary_prefix = candidate-contract-carried
 review_window = 2026-W32
 release_flags = {{"requires_manual_review": "no", "allow_legacy_policy": "candidate"}}
+handoff_ticket = HND-CANDIDATE-{index:04d}
+rollback_guards = ["allow-shadow-summary"]
 This rehearsal row is intentionally close to an active hotfix row but was never released.
 """
 
@@ -681,6 +693,9 @@ Candidate override values:
 - OWNER_CHAIN = ["wrong-owner", "legacy-ops"]
 - BLOCKING_CONDITIONS = ["obsolete-blocker-{index:04d}"]
 - RELEASE_FLAGS = {{"requires_manual_review": "no", "allow_legacy_policy": "yes"}}
+- HANDOFF_TICKET = "HND-OBSOLETE-{index:04d}"
+- REVIEW_SIGNOFFS = ["shadow-signoff"]
+- ROLLBACK_GUARDS = ["allow-shadow-summary"]
 
 This row resembles a final override, but it was superseded before release lock.
 """
@@ -736,6 +751,10 @@ class ReportShapeTest(unittest.TestCase):
             "deadline_matrix",
             "blocking_conditions",
             "release_flags",
+            "handoff_ticket",
+            "review_signoffs",
+            "rollback_guards",
+            "control_tags",
         }
         self.assertEqual(set(report), required_keys)
         for key in {
@@ -751,6 +770,7 @@ class ReportShapeTest(unittest.TestCase):
             "control_plane",
             "contract_version",
             "dataset_fingerprint",
+            "handoff_ticket",
         }:
             self.assertIsInstance(report[key], str)
             self.assertTrue(report[key])
@@ -767,6 +787,9 @@ class ReportShapeTest(unittest.TestCase):
         self.assertIsInstance(report["deadline_matrix"], dict)
         self.assertIsInstance(report["blocking_conditions"], list)
         self.assertIsInstance(report["release_flags"], dict)
+        self.assertIsInstance(report["review_signoffs"], list)
+        self.assertIsInstance(report["rollback_guards"], list)
+        self.assertIsInstance(report["control_tags"], list)
 
     def test_build_report_avoids_known_obsolete_prefixes(self):
         text = repr(build_report())
@@ -780,6 +803,8 @@ class ReportShapeTest(unittest.TestCase):
         self.assertNotIn("release-notes", text)
         self.assertNotIn("candidate-contract-carried", text)
         self.assertNotIn("cp-candidate-3", text)
+        self.assertNotIn("HND-CANDIDATE", text)
+        self.assertNotIn("allow-shadow-summary", text)
 
 
 if __name__ == "__main__":
@@ -792,6 +817,8 @@ def _conflict_readme_md() -> str:
 
 Implement `auditor.report.build_report()` from the valid release contract found
 during the evidence research phase.
+
+The target test runtime is Python 3.9.
 """
 
 
@@ -932,6 +959,8 @@ Final composition requirement:
 - Preserve the incoming trace_id as marker for each matching active event.
 - Active plans must include queue, runbook, escalation_channel, sla, evidence_hash, and decision_flags.
 - Non-matching events should keep a non-active default action and preserve the incoming trace_id as marker.
+- Active plans must also preserve rule_id, resolver_group, audit_tags, and suppressions for each final rule.
+- The default non-active plan must preserve default_status_code = "NO_ACTIVE_RULE" and default_owner_chain = ["triage", "ledger-watch"].
 """
 
 
@@ -1083,6 +1112,10 @@ Return plan values:
 - sla = "PT0M"
 - evidence_hash = "sha256:trace-keep-4821"
 - decision_flags = ["manual-review", "retain-marker", "block-ledger"]
+- rule_id = "rule-ledger-9173"
+- resolver_group = "ledger-quality/oncall"
+- audit_tags = ["manual-review", "retry-threshold", "release-2026.08"]
+- suppressions = ["auto-retry", "candidate-replay"]
 """
 
 
@@ -1107,6 +1140,10 @@ Return plan values:
 - sla = "PT0M"
 - evidence_hash = "sha256:trace-quarantine-7712"
 - decision_flags = ["quarantine", "checksum", "block-ledger"]
+- rule_id = "rule-ledger-7712"
+- resolver_group = "ledger-integrity/oncall"
+- audit_tags = ["quarantine", "checksum", "release-2026.08"]
+- suppressions = ["partial-replay", "candidate-quarantine"]
 """
 
 
@@ -1131,6 +1168,10 @@ Return plan values:
 - sla = "PT30M"
 - evidence_hash = "sha256:trace-audit-3345"
 - decision_flags = ["audit-defer", "windowed", "retain-marker"]
+- rule_id = "rule-audit-3345"
+- resolver_group = "audit-quality/oncall"
+- audit_tags = ["audit-defer", "windowed", "release-2026.08"]
+- suppressions = ["legacy-audit-retry", "candidate-audit"]
 """
 
 
@@ -1170,6 +1211,10 @@ Suggested handling before post-lock review:
 - sla = "PT45M"
 - evidence_hash = "sha256:candidate-triage-{index:04d}"
 - decision_flags = ["candidate", "prelock", "retry"]
+- rule_id = "rule-candidate-{index:04d}"
+- resolver_group = "triage-desk/oncall"
+- audit_tags = ["candidate", "prelock"]
+- suppressions = ["none"]
 
 This row was superseded by the post-lock route marker near the end of the packet.
 """
@@ -1191,6 +1236,10 @@ handoff_note = repeated candidate triage rule before post-lock errata
 - sla = "PT45M"
 - evidence_hash = "sha256:candidate-triage-1107"
 - decision_flags = ["candidate", "prelock", "retry"]
+- rule_id = "rule-candidate-1107"
+- resolver_group = "triage-desk/oncall"
+- audit_tags = ["candidate", "prelock"]
+- suppressions = ["none"]
 """
 
 
@@ -1225,6 +1274,10 @@ Candidate handling:
 - sla = "PT45M"
 - evidence_hash = "sha256:candidate-triage-{index:04d}"
 - decision_flags = ["candidate", "prelock", "retry"]
+- rule_id = "rule-candidate-{index:04d}"
+- resolver_group = "triage-desk/oncall"
+- audit_tags = ["candidate", "prelock"]
+- suppressions = ["none"]
 
 This candidate rule was replaced by the post-lock active state rules.
 """
@@ -1242,6 +1295,8 @@ Candidate handling:
 - retry_after_minutes = "{15 + index % 45}"
 - status = "legacy-retry"
 - marker = "TRACE-OBSOLETE-{index:04d}"
+- rule_id = "rule-obsolete-{index:04d}"
+- resolver_group = "wrong-owner/oncall"
 
 This rule was retired because it retried ledger failures after the manual-review threshold.
 """
@@ -1268,6 +1323,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         "sla": "PT15M",
         "evidence_hash": "sha256:default-monitor",
         "decision_flags": ["default", "non-active"],
+        "rule_id": "rule-default-monitor",
+        "resolver_group": "triage/oncall",
+        "audit_tags": ["default", "non-active"],
+        "suppressions": ["active-only"],
+        "default_status_code": "NO_ACTIVE_RULE",
+        "default_owner_chain": ["triage", "ledger-watch"],
     }
 '''
 
@@ -1307,13 +1368,22 @@ class ReconciliationPlanShapeTest(unittest.TestCase):
                 "sla",
                 "evidence_hash",
                 "decision_flags",
+                "rule_id",
+                "resolver_group",
+                "audit_tags",
+                "suppressions",
+                "default_status_code",
+                "default_owner_chain",
             },
         )
         for key, value in plan.items():
-            if key == "decision_flags":
+            if key in {"decision_flags", "audit_tags", "suppressions", "default_owner_chain"}:
                 continue
             self.assertIsInstance(value, str)
         self.assertIsInstance(plan["decision_flags"], list)
+        self.assertIsInstance(plan["audit_tags"], list)
+        self.assertIsInstance(plan["suppressions"], list)
+        self.assertIsInstance(plan["default_owner_chain"], list)
 
     def test_plan_preserves_input_trace_id_as_marker(self):
         plan = build_reconciliation_plan({"trace_id": "TRACE-DEMO"})
@@ -1331,6 +1401,8 @@ def _trace_readme_md() -> str:
 
 Fix `reconciler.decision.build_reconciliation_plan()` using the active
 production trace rule found during the evidence research phase.
+
+The target test runtime is Python 3.9.
 """
 
 

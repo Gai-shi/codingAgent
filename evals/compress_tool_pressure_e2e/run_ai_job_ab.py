@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterator, Sequence, TextIO
@@ -51,12 +52,26 @@ TOOL_POLICIES = (TOOL_POLICY_NEUTRAL, TOOL_POLICY_GUIDED)
 GUIDED_COMPRESS_TOOL_HINT = """工具使用提示：
 当前环境提供 compress_tool。读取长 evidence 或发现之前读取的是 pre-lock/误导资料后，如果你已经抽取出后续需要保留的事实，可以自主调用 compress_tool，把已读的冗长工具输出替换成短摘要，再继续完成任务；是否调用由你判断。"""
 
+_RUN_LOG_LOCK = threading.Lock()
+_PROGRESS_LOCK = threading.Lock()
+
 
 @dataclass(frozen=True)
 class SessionSection:
     title: str
     language: str
     content: str
+
+
+@dataclass(frozen=True)
+class VariantTask:
+    output: Path
+    turns: Sequence[object]
+    variant: str
+    disable_compress_tool: bool
+    case_id: str
+    pressure: str
+    tool_policy: str
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -95,6 +110,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum number of ai_job variant processes to run concurrently.",
+    )
+    parser.add_argument(
         "--auto-compression-context-window",
         type=int,
         default=10_000_000,
@@ -103,8 +124,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             "context compression does not mask compress_tool behavior."
         ),
     )
-    parser.add_argument("--progress-interval-seconds", type=float, default=1.0)
-    parser.add_argument("--no-progress", action="store_true")
+    parser.add_argument("--progress-interval-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--progress",
+        dest="no_progress",
+        action="store_false",
+        help="Show live per-variant progress in the terminal.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        dest="no_progress",
+        action="store_true",
+        default=True,
+        help="Keep terminal output compact and write progress to run_ai_job_ab.log.",
+    )
     args = parser.parse_args(argv)
 
     output = Path(args.output).expanduser().resolve()
@@ -113,28 +146,39 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
+    run_log_path = output / "run_ai_job_ab.log"
 
     case_ids = list(CASE_IDS) if args.case_id == "all" else [args.case_id]
     selected_pressures = pressure_names(args.pressure)
     selected_tool_policies = _tool_policy_names(args.tool_policy)
+    if args.max_workers < 1:
+        parser.error("--max-workers must be >= 1")
 
     multi_policy = len(selected_tool_policies) > 1
     policy_results: dict[str, dict[str, object]] = {}
-    for tool_policy in selected_tool_policies:
-        policy_output = output / tool_policy if multi_policy else output
-        policy_output.mkdir(parents=True, exist_ok=True)
-        cases = _run_policy_suite(
-            args,
-            output=policy_output,
-            case_ids=case_ids,
-            selected_pressures=selected_pressures,
-            tool_policy=tool_policy,
-        )
-        policy_results[tool_policy] = {
-            "tool_policy": tool_policy,
-            "cases": cases,
-            "summary": _summarize_suite(cases),
-        }
+    with run_log_path.open("w", encoding="utf-8") as run_log:
+        _write_run_log(run_log, "ai_job compress_tool pressure eval started")
+        _write_run_log(run_log, f"output={output}")
+        _write_run_log(run_log, f"case_ids={case_ids}")
+        _write_run_log(run_log, f"pressures={selected_pressures}")
+        _write_run_log(run_log, f"tool_policies={selected_tool_policies}")
+        _write_run_log(run_log, f"max_workers={args.max_workers}")
+        for tool_policy in selected_tool_policies:
+            policy_output = output / tool_policy if multi_policy else output
+            policy_output.mkdir(parents=True, exist_ok=True)
+            cases = _run_policy_suite(
+                args,
+                output=policy_output,
+                case_ids=case_ids,
+                selected_pressures=selected_pressures,
+                tool_policy=tool_policy,
+                run_log=run_log,
+            )
+            policy_results[tool_policy] = {
+                "tool_policy": tool_policy,
+                "cases": cases,
+                "summary": _summarize_suite(cases),
+            }
 
     single_policy_result = policy_results[selected_tool_policies[0]] if len(selected_tool_policies) == 1 else None
 
@@ -145,6 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tool_policy": selected_tool_policies[0] if len(selected_tool_policies) == 1 else "all",
         "tool_policies": selected_tool_policies,
         "noise_blocks_override": args.noise_blocks,
+        "run_log": str(run_log_path),
         "policy_results": policy_results,
         "cases": single_policy_result["cases"] if single_policy_result is not None else None,
         "summary": (
@@ -153,11 +198,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else _summarize_policy_results(policy_results)
         ),
     }
-    (output / "result_compress_tool_ab.json").write_text(
+    result_path = output / "result_compress_tool_ab.json"
+    result_path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    _append_result_summary_log(run_log_path, result_path, result)
+    print(_format_run_summary(result_path, run_log_path, result))
     return 0 if result["summary"]["compress_tool_helped_count"] > 0 else 1
 
 
@@ -169,6 +216,52 @@ def _tool_policy_names(selection: str) -> list[str]:
     return [selection]
 
 
+def _write_run_log(stream: TextIO, message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with _RUN_LOG_LOCK:
+        stream.write(f"[{timestamp}] {message}\n")
+        stream.flush()
+
+
+def _append_result_summary_log(path: Path, result_path: Path, result: dict[str, object]) -> None:
+    summary = result["summary"]
+    with path.open("a", encoding="utf-8") as stream:
+        _write_run_log(stream, f"result={result_path}")
+        _write_run_log(
+            stream,
+            (
+                "summary "
+                f"enabled_success_rate={summary['enabled_success_rate']} "
+                f"disabled_success_rate={summary['disabled_success_rate']} "
+                f"correctness_delta={summary['correctness_delta']} "
+                f"compress_tool_helped_count={summary['compress_tool_helped_count']} "
+                f"enabled_compress_tool_call_count={summary['enabled_compress_tool_call_count']}"
+            ),
+        )
+
+
+def _format_run_summary(result_path: Path, run_log_path: Path, result: dict[str, object]) -> str:
+    summary = result["summary"]
+    lines = [
+        "compress_tool pressure eval completed",
+        f"result_json: {result_path}",
+        f"run_log: {run_log_path}",
+        (
+            "summary: "
+            f"enabled_success_rate={summary['enabled_success_rate']}, "
+            f"disabled_success_rate={summary['disabled_success_rate']}, "
+            f"correctness_delta={summary['correctness_delta']}, "
+            f"compress_tool_helped_count={summary['compress_tool_helped_count']}, "
+            f"enabled_compress_tool_call_count={summary['enabled_compress_tool_call_count']}"
+        ),
+    ]
+    pure_delta = summary.get("pure_availability_delta")
+    guided_delta = summary.get("guided_tool_delta")
+    if pure_delta is not None or guided_delta is not None:
+        lines.append(f"policy_deltas: pure_availability_delta={pure_delta}, guided_tool_delta={guided_delta}")
+    return "\n".join(lines)
+
+
 def _run_policy_suite(
     args: argparse.Namespace,
     *,
@@ -176,36 +269,56 @@ def _run_policy_suite(
     case_ids: Sequence[str],
     selected_pressures: Sequence[str],
     tool_policy: str,
+    run_log: TextIO,
 ) -> dict[str, dict[str, object]]:
-    cases: dict[str, dict[str, object]] = {}
+    cell_inputs: dict[tuple[str, str], dict[str, object]] = {}
+    variant_tasks: list[VariantTask] = []
     for case_id in case_ids:
-        case_results: dict[str, object] = {}
         for pressure in selected_pressures:
             case_pressure_output = output / case_id / pressure
             case_pressure_output.mkdir(parents=True, exist_ok=True)
             turns = build_prompt_turns(case_id=case_id, pressure=pressure)
             write_prompt_artifacts(case_pressure_output, turns)
+            cell_inputs[(case_id, pressure)] = {
+                "case_id": case_id,
+                "pressure": pressure,
+                "tool_policy": tool_policy,
+                "turns": turns,
+            }
+            variant_tasks.append(
+                VariantTask(
+                    output=case_pressure_output,
+                    turns=turns,
+                    variant="enabled",
+                    disable_compress_tool=False,
+                    case_id=case_id,
+                    pressure=pressure,
+                    tool_policy=tool_policy,
+                )
+            )
+            variant_tasks.append(
+                VariantTask(
+                    output=case_pressure_output,
+                    turns=turns,
+                    variant="disabled",
+                    disable_compress_tool=True,
+                    case_id=case_id,
+                    pressure=pressure,
+                    tool_policy=tool_policy,
+                )
+            )
 
-            enabled = _run_variant(
-                args,
-                output=case_pressure_output,
-                turns=turns,
-                variant="enabled",
-                disable_compress_tool=False,
-                case_id=case_id,
-                pressure=pressure,
-                tool_policy=tool_policy,
-            )
-            disabled = _run_variant(
-                args,
-                output=case_pressure_output,
-                turns=turns,
-                variant="disabled",
-                disable_compress_tool=True,
-                case_id=case_id,
-                pressure=pressure,
-                tool_policy=tool_policy,
-            )
+    _write_run_log(run_log, f"{tool_policy}: scheduling {len(variant_tasks)} variant runs")
+    variant_results = _run_variant_tasks(args, variant_tasks, run_log)
+
+    cases: dict[str, dict[str, object]] = {}
+    for case_id in case_ids:
+        case_results: dict[str, object] = {}
+        for pressure in selected_pressures:
+            cell = cell_inputs[(case_id, pressure)]
+            turns = cell["turns"]
+            enabled = variant_results[(tool_policy, case_id, pressure, "enabled")]
+            disabled = variant_results[(tool_policy, case_id, pressure, "disabled")]
             comparison = _compare(enabled, disabled)
             case_results[pressure] = {
                 "case_id": case_id,
@@ -229,17 +342,37 @@ def _run_policy_suite(
     return cases
 
 
+def _run_variant_tasks(
+    args: argparse.Namespace,
+    tasks: Sequence[VariantTask],
+    run_log: TextIO,
+) -> dict[tuple[str, str, str, str], dict[str, object]]:
+    results: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = {
+            executor.submit(_run_variant, args, task, run_log): task
+            for task in tasks
+        }
+        for future in as_completed(futures):
+            task = futures[future]
+            result = future.result()
+            key = (task.tool_policy, task.case_id, task.pressure, task.variant)
+            results[key] = result
+    return results
+
+
 def _run_variant(
     args: argparse.Namespace,
-    *,
-    output: Path,
-    turns: Sequence[object],
-    variant: str,
-    disable_compress_tool: bool,
-    case_id: str,
-    pressure: str,
-    tool_policy: str,
+    task: VariantTask,
+    run_log: TextIO,
 ) -> dict[str, object]:
+    output = task.output
+    turns = task.turns
+    variant = task.variant
+    disable_compress_tool = task.disable_compress_tool
+    case_id = task.case_id
+    pressure = task.pressure
+    tool_policy = task.tool_policy
     variant_dir = output / variant
     variant_dir.mkdir(parents=True, exist_ok=True)
     target = create_case_workspace(
@@ -271,6 +404,8 @@ def _run_variant(
     env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
 
     started_at = time.monotonic()
+    label = f"{tool_policy}/{case_id}/{pressure}/{variant}"
+    _write_run_log(run_log, f"{label} started")
     completed = _run_command_with_progress(
         cmd,
         cwd=source_root,
@@ -279,7 +414,8 @@ def _run_variant(
         timeout_seconds=args.timeout_seconds,
         progress_interval_seconds=args.progress_interval_seconds,
         show_progress=not args.no_progress,
-        label=f"{tool_policy}/{case_id}/{pressure}/{variant}",
+        label=label,
+        log_stream=run_log,
     )
     elapsed_seconds = round(time.monotonic() - started_at, 3)
 
@@ -309,6 +445,14 @@ def _run_variant(
     (variant_dir / f"result_{variant}.json").write_text(
         json.dumps(variant_result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+    _write_run_log(
+        run_log,
+        (
+            f"{label} graded passed={grade.passed} score={grade.score} "
+            f"compress_calls={diagnostics['compress_tool_call_count']} "
+            f"saved_chars={diagnostics['estimated_tool_context_chars_saved']}"
+        ),
     )
     return variant_result
 
@@ -780,6 +924,7 @@ def _run_command_with_progress(
     progress_interval_seconds: float,
     show_progress: bool,
     label: str,
+    log_stream: TextIO,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         cmd,
@@ -824,6 +969,8 @@ def _run_command_with_progress(
 
             rendered_second = int(elapsed_seconds)
             if rendered_second != last_rendered_second:
+                if rendered_second == 0 or rendered_second % max(1, int(progress_interval_seconds)) == 0:
+                    _write_run_log(log_stream, f"{label} running elapsed={_format_elapsed(elapsed_seconds)}")
                 _render_progress_line(
                     show_progress=show_progress,
                     label=label,
@@ -851,6 +998,10 @@ def _run_command_with_progress(
         elapsed_seconds=elapsed_seconds,
         stream=sys.stderr,
     )
+    _write_run_log(
+        log_stream,
+        f"{label} completed returncode={process.returncode} elapsed={_format_elapsed(elapsed_seconds)}",
+    )
 
     if "exception" in result_box:
         raise result_box["exception"]
@@ -860,15 +1011,17 @@ def _run_command_with_progress(
 def _render_progress_line(*, show_progress: bool, label: str, elapsed_seconds: float, stream: TextIO) -> None:
     if not show_progress:
         return
-    stream.write(f"\r\033[K{label} 正在运行中...已运行{_format_elapsed(elapsed_seconds)}")
-    stream.flush()
+    with _PROGRESS_LOCK:
+        stream.write(f"\r\033[K{label} 正在运行中...已运行{_format_elapsed(elapsed_seconds)}")
+        stream.flush()
 
 
 def _finish_progress_line(*, show_progress: bool, status: str, elapsed_seconds: float, stream: TextIO) -> None:
     if not show_progress:
         return
-    stream.write(f"\r\033[K{status}，耗时{_format_elapsed(elapsed_seconds)}\n")
-    stream.flush()
+    with _PROGRESS_LOCK:
+        stream.write(f"\r\033[K{status}，耗时{_format_elapsed(elapsed_seconds)}\n")
+        stream.flush()
 
 
 def _format_elapsed(elapsed_seconds: float) -> str:

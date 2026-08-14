@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
+import threading
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 from evals.compress_tool_pressure_e2e.benchmark_case import (
     CASE_CONFLICT_CONTRACT_DELAY,
     CASE_TRACE_DEBUG_DELAY,
+    DEFAULT_NOISE_BLOCKS,
     build_prompt_turns,
     create_case_workspace,
     noisy_evidence_text,
@@ -17,8 +22,11 @@ from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
     GUIDED_COMPRESS_TOOL_HINT,
     TOOL_POLICY_GUIDED,
     TOOL_POLICY_NEUTRAL,
+    VariantTask,
     _compare,
     _effective_prompt_texts,
+    _format_run_summary,
+    _run_variant_tasks,
     _summarize_policy_results,
     _summarize_suite,
     collect_run_diagnostics,
@@ -52,6 +60,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("compress-tool-preserved", overrides)
         self.assertIn("Final Contract Delta", delta)
         self.assertIn("KEEP-CANDIDATE-DEFAULT", candidate_delta)
+        self.assertIn("HND-9173-W33", overrides)
+        self.assertIn("deny-legacy-policy", overrides)
         self.assertIn("return {}", report)
         self.assertIn(CASE_CONFLICT_CONTRACT_DELAY, manifest)
 
@@ -86,6 +96,8 @@ class CompressToolPressureE2ETest(unittest.TestCase):
         self.assertIn("open-manual-review", notes)
         self.assertIn("quarantine-ledger-batch", notes)
         self.assertIn("defer-audit-sync", notes)
+        self.assertIn("rule-ledger-9173", notes)
+        self.assertIn("NO_ACTIVE_RULE", decision)
         self.assertIn("Active Trace Manifest", manifest)
         self.assertIn("TRACE-CANDIDATE", candidate_manifest)
         self.assertIn('"action": "monitor"', decision)
@@ -98,6 +110,7 @@ class CompressToolPressureE2ETest(unittest.TestCase):
             self.assertNotIn("compress_tool", joined)
             self.assertNotIn("压缩", joined)
             self.assertIn("evidence/00_index.txt", joined)
+            self.assertIn("Python 3.9", joined)
 
     def test_guided_policy_injects_tool_hint_only_for_enabled_variant(self):
         turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="hard")
@@ -194,6 +207,14 @@ def build_report() -> dict[str, object]:
             "requires_manual_review": "yes",
             "allow_legacy_policy": "no",
         },
+        "handoff_ticket": "HND-9173-W33",
+        "review_signoffs": ["sig-context-9173", "sig-release-42", "sig-audit-771"],
+        "rollback_guards": [
+            "deny-legacy-policy",
+            "block-shadow-render",
+            "freeze-marker",
+        ],
+        "control_tags": ["sox-audit", "retention-critical", "post-lock"],
     }
 ''',
                 encoding="utf-8",
@@ -247,6 +268,10 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "sla": "PT0M",
             "evidence_hash": "sha256:trace-keep-4821",
             "decision_flags": ["manual-review", "retain-marker", "block-ledger"],
+            "rule_id": "rule-ledger-9173",
+            "resolver_group": "ledger-quality/oncall",
+            "audit_tags": ["manual-review", "retry-threshold", "release-2026.08"],
+            "suppressions": ["auto-retry", "candidate-replay"],
         }
     if (
         event.get("tenant") == "aurora-ledger"
@@ -267,6 +292,10 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "sla": "PT0M",
             "evidence_hash": "sha256:trace-quarantine-7712",
             "decision_flags": ["quarantine", "checksum", "block-ledger"],
+            "rule_id": "rule-ledger-7712",
+            "resolver_group": "ledger-integrity/oncall",
+            "audit_tags": ["quarantine", "checksum", "release-2026.08"],
+            "suppressions": ["partial-replay", "candidate-quarantine"],
         }
     if (
         event.get("tenant") == "aurora-ledger"
@@ -287,6 +316,10 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "sla": "PT30M",
             "evidence_hash": "sha256:trace-audit-3345",
             "decision_flags": ["audit-defer", "windowed", "retain-marker"],
+            "rule_id": "rule-audit-3345",
+            "resolver_group": "audit-quality/oncall",
+            "audit_tags": ["audit-defer", "windowed", "release-2026.08"],
+            "suppressions": ["legacy-audit-retry", "candidate-audit"],
         }
     return {
         "action": "monitor",
@@ -301,6 +334,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         "sla": "PT15M",
         "evidence_hash": "sha256:default-monitor",
         "decision_flags": ["default", "non-active"],
+        "rule_id": "rule-default-monitor",
+        "resolver_group": "triage/oncall",
+        "audit_tags": ["default", "non-active"],
+        "suppressions": ["active-only"],
+        "default_status_code": "NO_ACTIVE_RULE",
+        "default_owner_chain": ["triage", "ledger-watch"],
     }
 ''',
                 encoding="utf-8",
@@ -319,6 +358,9 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         self.assertEqual(stats["pressure"], "hard")
         self.assertEqual(stats["noise_blocks"], 2)
         self.assertGreater(stats["evidence_chars"], len(noisy_evidence_text(noise_blocks=2)))
+
+    def test_default_hard_noise_blocks_is_high_pressure(self):
+        self.assertEqual(DEFAULT_NOISE_BLOCKS, 1000)
 
     def test_diagnostics_count_compress_tool_usage_and_estimated_saved_chars(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -643,6 +685,66 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertEqual(summary["pure_availability_delta"], 0)
         self.assertEqual(summary["guided_tool_delta"], 1)
         self.assertEqual(summary["enabled_compress_tool_call_count"], 2)
+
+    def test_format_run_summary_points_to_result_and_log_without_full_json(self):
+        result = {
+            "summary": {
+                "enabled_success_rate": 1.0,
+                "disabled_success_rate": 0.5,
+                "correctness_delta": 1,
+                "compress_tool_helped_count": 1,
+                "enabled_compress_tool_call_count": 2,
+            }
+        }
+
+        text = _format_run_summary(Path("/tmp/result.json"), Path("/tmp/run.log"), result)
+
+        self.assertIn("result_json: /tmp/result.json", text)
+        self.assertIn("run_log: /tmp/run.log", text)
+        self.assertIn("enabled_success_rate=1.0", text)
+        self.assertNotIn("policy_results", text)
+
+    def test_run_variant_tasks_uses_thread_pool_workers(self):
+        barrier = threading.Barrier(2)
+        seen_threads: set[str] = set()
+        tasks = [
+            VariantTask(
+                output=Path("/tmp/cell-a"),
+                turns=[],
+                variant="enabled",
+                disable_compress_tool=False,
+                case_id="case_a",
+                pressure="hard",
+                tool_policy=TOOL_POLICY_NEUTRAL,
+            ),
+            VariantTask(
+                output=Path("/tmp/cell-b"),
+                turns=[],
+                variant="disabled",
+                disable_compress_tool=True,
+                case_id="case_b",
+                pressure="hard",
+                tool_policy=TOOL_POLICY_NEUTRAL,
+            ),
+        ]
+
+        def fake_run_variant(_args, task, _run_log):
+            seen_threads.add(threading.current_thread().name)
+            barrier.wait(timeout=2)
+            return {"task": task.variant}
+
+        args = SimpleNamespace(max_workers=2)
+        with mock.patch(
+            "evals.compress_tool_pressure_e2e.run_ai_job_ab._run_variant",
+            side_effect=fake_run_variant,
+        ):
+            results = _run_variant_tasks(args, tasks, io.StringIO())
+
+        self.assertEqual(set(results), {
+            (TOOL_POLICY_NEUTRAL, "case_a", "hard", "enabled"),
+            (TOOL_POLICY_NEUTRAL, "case_b", "hard", "disabled"),
+        })
+        self.assertGreaterEqual(len(seen_threads), 2)
 
 
 if __name__ == "__main__":
