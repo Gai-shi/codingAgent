@@ -26,17 +26,27 @@ class CompressToolPressureE2ETest(unittest.TestCase):
             target = create_case_workspace(Path(tmp_dir), force=True, noise_blocks=3)
 
             index = (target / "evidence" / "00_index.txt").read_text(encoding="utf-8")
+            default_packet = (target / "evidence" / "01_default_release_packet.txt").read_text(
+                encoding="utf-8"
+            )
+            errata = (target / "evidence" / "97_contract_errata_index.txt").read_text(encoding="utf-8")
             decisions = (target / "evidence" / "contract_decisions.txt").read_text(encoding="utf-8")
             overrides = (target / "evidence" / "release_overrides.txt").read_text(encoding="utf-8")
             delta = (target / "evidence" / "final_contract_delta.txt").read_text(encoding="utf-8")
+            candidate_delta = (target / "evidence" / "release_candidate_delta.txt").read_text(
+                encoding="utf-8"
+            )
             report = (target / "auditor" / "report.py").read_text(encoding="utf-8")
             manifest = (target / ".ai_job_eval_case.json").read_text(encoding="utf-8")
 
-        self.assertIn("legacy_contract_archive.txt", index)
+        self.assertIn("01_default_release_packet.txt", index)
+        self.assertIn("ERRATA_ROUTE = evidence/97_contract_errata_index.txt", default_packet)
+        self.assertIn("legacy_contract_archive.txt", errata)
         self.assertIn("KEEP-COMPRESS-TOOL-9173", decisions)
         self.assertIn("OBSOLETE_MARKER_0001", decisions)
         self.assertIn("compress-tool-preserved", overrides)
         self.assertIn("Final Contract Delta", delta)
+        self.assertIn("KEEP-CANDIDATE-DEFAULT", candidate_delta)
         self.assertIn("return {}", report)
         self.assertIn(CASE_CONFLICT_CONTRACT_DELAY, manifest)
 
@@ -51,18 +61,28 @@ class CompressToolPressureE2ETest(unittest.TestCase):
             )
 
             index = (target / "evidence" / "00_index.txt").read_text(encoding="utf-8")
+            triage = (target / "evidence" / "01_incident_triage_packet.log").read_text(
+                encoding="utf-8"
+            )
+            errata = (target / "evidence" / "97_trace_errata_index.txt").read_text(encoding="utf-8")
             production_trace = (target / "evidence" / "production_trace.log").read_text(encoding="utf-8")
             notes = (target / "evidence" / "state_machine_notes.txt").read_text(encoding="utf-8")
             manifest = (target / "evidence" / "active_trace_manifest.txt").read_text(encoding="utf-8")
+            candidate_manifest = (target / "evidence" / "replay_analysis_manifest.txt").read_text(
+                encoding="utf-8"
+            )
             decision = (target / "reconciler" / "decision.py").read_text(encoding="utf-8")
 
-        self.assertIn("incident_trace_archive.log", index)
+        self.assertIn("01_incident_triage_packet.log", index)
+        self.assertIn("ERRATA_ROUTE = evidence/97_trace_errata_index.txt", triage)
+        self.assertIn("incident_trace_archive.log", errata)
         self.assertIn("TRACE-KEEP-4821", production_trace)
         self.assertIn("TRACE-OBSOLETE-0001", production_trace)
         self.assertIn("open-manual-review", notes)
         self.assertIn("quarantine-ledger-batch", notes)
         self.assertIn("defer-audit-sync", notes)
         self.assertIn("Active Trace Manifest", manifest)
+        self.assertIn("TRACE-CANDIDATE", candidate_manifest)
         self.assertIn('"action": "monitor"', decision)
 
     def test_prompts_do_not_name_compress_tool(self):

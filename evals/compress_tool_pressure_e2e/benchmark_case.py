@@ -147,16 +147,29 @@ def evidence_chars(*, case_id: str = CASE_ID, noise_blocks: int = DEFAULT_NOISE_
     if case_id == CASE_CONFLICT_CONTRACT_DELAY:
         return (
             len(_conflict_evidence_index())
+            + len(_conflict_default_release_packet(noise_blocks=noise_blocks))
+            + len(_conflict_errata_index())
+            + len(_conflict_contract_decisions(noise_blocks=noise_blocks))
+            + len(_conflict_release_overrides(noise_blocks=noise_blocks))
             + len(_conflict_contract_decisions(noise_blocks=noise_blocks))
             + len(_conflict_release_overrides(noise_blocks=noise_blocks))
             + len(_conflict_final_delta())
+            + len(_conflict_candidate_delta(noise_blocks=noise_blocks))
+            + len(_conflict_shadow_hotfix_matrix(noise_blocks=noise_blocks))
+            + len(_conflict_final_delta_draft())
         )
     if case_id == CASE_TRACE_DEBUG_DELAY:
         return (
             len(_trace_evidence_index())
+            + len(_trace_default_triage_packet(noise_blocks=noise_blocks))
+            + len(_trace_errata_index())
             + len(_trace_production_log(noise_blocks=noise_blocks))
             + len(_trace_state_machine_notes(noise_blocks=noise_blocks))
+            + len(_trace_production_log(noise_blocks=noise_blocks))
             + len(_trace_active_manifest())
+            + len(_trace_replay_analysis_manifest(noise_blocks=noise_blocks))
+            + len(_trace_candidate_state_notes(noise_blocks=noise_blocks))
+            + len(_trace_active_manifest_draft())
         )
     raise ValueError(f"unknown case_id: {case_id}")
 
@@ -179,6 +192,11 @@ def _create_conflict_contract_workspace(target: Path, config: PressureConfig) ->
     _write(target / "tests" / "test_report.py", _conflict_test_report_py())
     _write(target / "evidence" / "00_index.txt", _conflict_evidence_index())
     _write(
+        target / "evidence" / "01_default_release_packet.txt",
+        _conflict_default_release_packet(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "97_contract_errata_index.txt", _conflict_errata_index())
+    _write(
         target / "evidence" / "contract_decisions.txt",
         _conflict_contract_decisions(noise_blocks=config.noise_blocks),
     )
@@ -195,6 +213,15 @@ def _create_conflict_contract_workspace(target: Path, config: PressureConfig) ->
         _conflict_release_overrides(noise_blocks=config.noise_blocks),
     )
     _write(target / "evidence" / "final_contract_delta.txt", _conflict_final_delta())
+    _write(
+        target / "evidence" / "release_candidate_delta.txt",
+        _conflict_candidate_delta(noise_blocks=config.noise_blocks),
+    )
+    _write(
+        target / "evidence" / "hotfix_shadow_matrix.txt",
+        _conflict_shadow_hotfix_matrix(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "final_contract_delta_draft.txt", _conflict_final_delta_draft())
     _write(target / "README.md", _conflict_readme_md())
 
 
@@ -208,6 +235,11 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
     _write(target / "tests" / "test_decision.py", _trace_test_decision_py())
     _write(target / "evidence" / "00_index.txt", _trace_evidence_index())
     _write(
+        target / "evidence" / "01_incident_triage_packet.log",
+        _trace_default_triage_packet(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "97_trace_errata_index.txt", _trace_errata_index())
+    _write(
         target / "evidence" / "production_trace.log",
         _trace_production_log(noise_blocks=config.noise_blocks),
     )
@@ -220,6 +252,15 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
         _trace_production_log(noise_blocks=config.noise_blocks),
     )
     _write(target / "evidence" / "active_trace_manifest.txt", _trace_active_manifest())
+    _write(
+        target / "evidence" / "replay_analysis_manifest.txt",
+        _trace_replay_analysis_manifest(noise_blocks=config.noise_blocks),
+    )
+    _write(
+        target / "evidence" / "state_machine_candidate_notes.txt",
+        _trace_candidate_state_notes(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "active_trace_manifest_draft.txt", _trace_active_manifest_draft())
     _write(target / "README.md", _trace_readme_md())
 
 
@@ -229,8 +270,8 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
             kind="evidence_research",
             text="""请先做证据调研。
 
-请从 evidence/00_index.txt 开始，根据索引自行定位实现依据。
-材料里包含很长的历史档案、草稿说明和较短的最终 delta；不要凭文件名直接猜最终来源。
+请从 evidence/00_index.txt 开始，按材料内部的路由说明定位实现依据。
+材料里有默认交接包、候选包和纠偏说明；不要凭文件名直接猜最终来源。
 本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
@@ -253,8 +294,8 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
             kind="trace_research",
             text="""请先做生产 trace 调研。
 
-请从 evidence/00_index.txt 开始，根据索引自行定位 active trace 依据。
-材料里包含很长的 incident archive、过期状态机规则和较短的 active manifest；不要凭文件名直接猜最终来源。
+请从 evidence/00_index.txt 开始，按材料内部的路由说明定位 active trace 依据。
+材料里有默认 triage 包、候选规则和纠偏说明；不要凭文件名直接猜最终来源。
 本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
@@ -293,16 +334,92 @@ Interpretation rule:
 def _conflict_evidence_index() -> str:
     return """# Evidence Index
 
-Start with the large archive when recovering the baseline contract:
-- legacy_contract_archive.txt: long baseline archive with final core fields mixed with obsolete candidates.
-- draft_release_notes.txt: long release note ledger; many rows were withdrawn or rolled back.
-- final_contract_delta.txt: short delta that identifies which archive facts remain active and which release-note overrides win.
+Default route:
+- Start with 01_default_release_packet.txt.
+- Follow any POST_LOCK_ROUTE or ERRATA_ROUTE instruction found inside that packet before implementation.
 
-Do not implement directly from the archive alone. The final implementation is baseline archive facts plus active delta overrides.
+Do not assume that a file is final because its name contains "final", "active", or "release".
+Several nearby files are retained only to reproduce old handoffs and rollback investigations.
 
 Compatibility aliases from older eval revisions:
 - contract_decisions.txt mirrors legacy_contract_archive.txt.
 - release_overrides.txt mirrors draft_release_notes.txt.
+"""
+
+
+def _conflict_default_release_packet(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Default Release Packet
+
+packet_state = PRE_LOCK_DEFAULT
+handoff_owner = release-notes
+handoff_confidence = high-before-post-lock-review
+
+This packet intentionally looks complete because it was the default handoff before
+the release lock review. It is not safe to implement until the packet footer has
+been checked for late routing changes.
+
+[DEFAULT_CONTRACT_BASELINE]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+channel = release-2026.08
+Suggested values before post-lock review:
+- REPORT_TITLE = "Q4-COMPRESS-AUDIT-DRAFT"
+- REQUIRED_MARKER = "KEEP-CANDIDATE-DEFAULT-1107"
+- POLICY_CODE = "POLICY-CANDIDATE-17"
+- OWNER = "release-notes"
+- FINAL_STATUS = "candidate-ready"
+- SUMMARY_PREFIX = "candidate-contract-carried"
+- RISK_LEVEL = "medium"
+- REVIEW_WINDOW = "2026-W32"
+- ESCALATION_CHANNEL = "release-handoff-room"
+- PRIMARY_REGION = "iad-3"
+- SECONDARY_REGION = "pdx-1"
+- AUDIT_TAGS = ["candidate-lock", "handoff-review", "prelock"]
+- VALIDATION_GATES = ["schema-review", "candidate-owner", "summary-review"]
+- OWNER_CHAIN = ["release-notes", "candidate-platform", "handoff-ops"]
+- BLOCKING_CONDITIONS = ["pending-post-lock-review"]
+- RELEASE_FLAGS = {"requires_manual_review": "no", "allow_legacy_policy": "candidate"}
+
+The default packet was useful for triage, but later errata may supersede it.
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_conflict_default_packet_noise_block(index))
+        if index in {max(1, noise_blocks // 3), max(1, (noise_blocks * 2) // 3)}:
+            blocks.append(_conflict_default_packet_repeated_baseline(index))
+    blocks.append(
+        """[POST_LOCK_ROUTE_CHANGE]
+route_state = SUPERSEDES_THIS_PACKET
+route_reason = post-lock contract review replaced the default release packet
+ERRATA_ROUTE = evidence/97_contract_errata_index.txt
+
+Everything above this route marker is a withdrawn default handoff unless another
+file on the errata route repeats it as active. Values from this packet are a common
+source of wrong implementations because they look complete.
+"""
+    )
+    return "\n\n".join(blocks) + "\n"
+
+
+def _conflict_errata_index() -> str:
+    return """# Contract Errata Index
+
+This errata index supersedes evidence/01_default_release_packet.txt.
+
+Active route, in order:
+1. legacy_contract_archive.txt recovers the locked baseline contract.
+2. draft_release_notes.txt recovers the active hotfix override rows.
+3. final_contract_delta.txt identifies which archive and hotfix facts survive post-lock review.
+
+Withdrawn or investigation-only files:
+- release_candidate_delta.txt is a candidate delta from the default handoff.
+- hotfix_shadow_matrix.txt contains rollback and shadow hotfix rehearsals.
+- final_contract_delta_draft.txt is a pre-lock draft with a misleading name.
+- contract_decisions.txt and release_overrides.txt are compatibility aliases, not extra evidence.
+
+Implementation rule:
+- Ignore the default release packet after reading this errata.
+- Compose only the locked baseline plus active post-lock delta.
 """
 
 
@@ -324,6 +441,67 @@ Final composition requirement:
 - summary must start with "compress-tool-preserved" and mention "KEEP-COMPRESS-TOOL-9173".
 - regions must be {"primary": "iad-7", "secondary": "pdx-2"}.
 - audit_tags, validation_gates, owner_chain, blocking_conditions, and release_flags must preserve the active record ordering.
+"""
+
+
+def _conflict_candidate_delta(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Release Candidate Delta
+
+delta_state = WITHDRAWN_AFTER_POST_LOCK_REVIEW
+source_packet = 01_default_release_packet.txt
+
+This file explains the old candidate path. It is retained to make rollback
+investigations reproducible, not to drive the final implementation.
+
+[CANDIDATE_DELTA_BASELINE]
+- REPORT_TITLE = "Q4-COMPRESS-AUDIT-DRAFT"
+- REQUIRED_MARKER = "KEEP-CANDIDATE-DEFAULT-1107"
+- POLICY_CODE = "POLICY-CANDIDATE-17"
+- OWNER = "release-notes"
+- FINAL_STATUS = "candidate-ready"
+- SUMMARY_PREFIX = "candidate-contract-carried"
+- REVIEW_WINDOW = "2026-W32"
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_conflict_candidate_delta_noise_block(index))
+    blocks.append(
+        """[WITHDRAWAL_FOOTER]
+withdrawn_by = final_contract_delta.txt
+withdrawal_reason = post-lock review selected KEEP-COMPRESS-TOOL-9173 and context-quality ownership
+"""
+    )
+    return "\n\n".join(blocks) + "\n"
+
+
+def _conflict_shadow_hotfix_matrix(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Hotfix Shadow Matrix
+
+matrix_state = ROLLBACK_REHEARSAL
+This file contains realistic hotfix rows that were used for rehearsal only.
+Do not use rows from this matrix for conflict_contract_delay.
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_conflict_shadow_hotfix_noise_block(index))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _conflict_final_delta_draft() -> str:
+    return """# Final Contract Delta Draft
+
+draft_state = PRE_LOCK_DRAFT_DO_NOT_IMPLEMENT
+
+This filename is intentionally close to final_contract_delta.txt, but this draft
+was replaced during post-lock review.
+
+Wrong draft composition:
+- summary starts with "candidate-contract-carried"
+- owner is "release-notes"
+- marker is "KEEP-CANDIDATE-DEFAULT-1107"
+- review_window is "2026-W32"
 """
 
 
@@ -398,6 +576,62 @@ This block is intentionally plausible but invalid.
 Historical note:
 The old implementation returned a plain string, stored report data in JSON, and ignored the review window.
 This record was rolled back after validation drift and must not affect the final implementation.
+"""
+
+
+def _conflict_default_packet_noise_block(index: int) -> str:
+    return f"""[default-handoff-row-{index:04d}]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+channel = release-2026.08
+This row repeats the pre-lock default path and looks valid until the packet footer is read.
+- REPORT_TITLE = "Q4-COMPRESS-AUDIT-DRAFT"
+- REQUIRED_MARKER = "KEEP-CANDIDATE-DEFAULT-{index:04d}"
+- POLICY_CODE = "POLICY-CANDIDATE-{index % 97:02d}"
+- OWNER = "release-notes"
+- FINAL_STATUS = "candidate-ready"
+- SUMMARY_PREFIX = "candidate-contract-carried"
+- REVIEW_WINDOW = "2026-W32"
+- ESCALATION_CHANNEL = "release-handoff-room"
+- PRIMARY_REGION = "iad-3"
+- SECONDARY_REGION = "pdx-1"
+- RELEASE_FLAGS = {{"requires_manual_review": "no", "allow_legacy_policy": "candidate"}}
+
+This row was superseded by the post-lock route marker near the end of the packet.
+"""
+
+
+def _conflict_default_packet_repeated_baseline(index: int) -> str:
+    return f"""[default-baseline-repeat-{index:04d}]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+handoff_note = repeated candidate baseline before post-lock errata
+- OWNER_CHAIN = ["release-notes", "candidate-platform", "handoff-ops"]
+- BLOCKING_CONDITIONS = ["pending-post-lock-review", "candidate-owner-missing-{index:04d}"]
+- AUDIT_TAGS = ["candidate-lock", "handoff-review", "prelock"]
+- VALIDATION_GATES = ["schema-review", "candidate-owner", "summary-review"]
+"""
+
+
+def _conflict_candidate_delta_noise_block(index: int) -> str:
+    return f"""[candidate-delta-row-{index:04d}]
+delta_state = WITHDRAWN_AFTER_POST_LOCK_REVIEW
+candidate_marker = KEEP-CANDIDATE-DEFAULT-{index:04d}
+candidate_owner = release-notes
+candidate_summary = candidate-contract-carried row {index:04d}
+candidate_blocker = pending-post-lock-review-{index:04d}
+This candidate delta resembles the post-lock delta but is explicitly withdrawn.
+"""
+
+
+def _conflict_shadow_hotfix_noise_block(index: int) -> str:
+    return f"""[shadow-hotfix-row-{index:04d}]
+record_state = ROLLBACK_REHEARSAL
+marker = KEEP-CANDIDATE-DEFAULT-{index:04d}
+hotfix_owner = release-notes
+status = candidate-ready
+summary_prefix = candidate-contract-carried
+review_window = 2026-W32
+release_flags = {{"requires_manual_review": "no", "allow_legacy_policy": "candidate"}}
+This rehearsal row is intentionally close to an active hotfix row but was never released.
 """
 
 
@@ -533,15 +767,85 @@ Interpretation rule:
 def _trace_evidence_index() -> str:
     return """# Trace Evidence Index
 
-Start with the archive when recovering production trace context:
-- incident_trace_archive.log: long incident archive with confirmed traces mixed with replay and sandbox traces.
-- state_machine_notes.txt: long rule ledger with active rules mixed with rollback candidates.
-- active_trace_manifest.txt: short manifest that identifies which trace ids and state rules are active for this release.
+Default route:
+- Start with 01_incident_triage_packet.log.
+- Follow any POST_LOCK_ROUTE or ERRATA_ROUTE instruction found inside that packet before implementation.
 
-Do not implement directly from the archive alone. The final implementation is active manifest ids plus active state rules.
+Do not assume that a file is final because its name contains "active", "manifest", or "production".
+Several nearby files are retained only to reproduce replay analysis and rollback investigations.
 
 Compatibility alias from older eval revisions:
 - production_trace.log mirrors incident_trace_archive.log.
+"""
+
+
+def _trace_default_triage_packet(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Incident Triage Packet
+
+packet_state = PRE_LOCK_TRIAGE_DEFAULT
+handoff_owner = triage-desk
+handoff_confidence = high-before-post-lock-review
+
+This packet intentionally looks complete because it was the default trace handoff
+before release lock review. It is not safe to implement until the packet footer
+has been checked for late routing changes.
+
+[DEFAULT_TRIAGE_RULE]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+tenant = aurora-ledger
+pipeline = delta-sync
+trace_id = TRACE-CANDIDATE-1107
+error_code = E-RETRY-CANDIDATE
+attempts = 2
+Suggested handling before post-lock review:
+- action = "retry-later"
+- owner = "triage-desk"
+- severity = "sev4"
+- retry_after_minutes = "45"
+- status = "candidate-retry"
+- marker = "TRACE-CANDIDATE-1107"
+
+The default packet was useful for triage, but later errata may supersede it.
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_trace_default_packet_noise_block(index))
+        if index in {max(1, noise_blocks // 3), max(1, (noise_blocks * 2) // 3)}:
+            blocks.append(_trace_default_packet_repeated_rule(index))
+    blocks.append(
+        """[POST_LOCK_ROUTE_CHANGE]
+route_state = SUPERSEDES_THIS_PACKET
+route_reason = post-lock trace review replaced the default triage packet
+ERRATA_ROUTE = evidence/97_trace_errata_index.txt
+
+Everything above this route marker is a withdrawn default handoff unless another
+file on the errata route repeats it as active. Values from this packet are a common
+source of wrong implementations because they look complete.
+"""
+    )
+    return "\n\n".join(blocks) + "\n"
+
+
+def _trace_errata_index() -> str:
+    return """# Trace Errata Index
+
+This errata index supersedes evidence/01_incident_triage_packet.log.
+
+Active route, in order:
+1. incident_trace_archive.log recovers the locked production traces.
+2. state_machine_notes.txt recovers the active state rules.
+3. active_trace_manifest.txt identifies which trace ids and state rules survive post-lock review.
+
+Withdrawn or investigation-only files:
+- replay_analysis_manifest.txt describes replay analysis and candidate handling.
+- state_machine_candidate_notes.txt contains rollback and candidate state rules.
+- active_trace_manifest_draft.txt is a pre-lock draft with a misleading name.
+- production_trace.log is a compatibility alias, not extra evidence.
+
+Implementation rule:
+- Ignore the default triage packet after reading this errata.
+- Compose only active manifest trace ids plus active state rules.
 """
 
 
@@ -563,6 +867,67 @@ Retired sources:
 Final composition requirement:
 - Preserve the incoming trace_id as marker for each matching active event.
 - Non-matching events should keep a non-active default action and preserve the incoming trace_id as marker.
+"""
+
+
+def _trace_replay_analysis_manifest(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Replay Analysis Manifest
+
+manifest_state = WITHDRAWN_AFTER_POST_LOCK_REVIEW
+source_packet = 01_incident_triage_packet.log
+
+This file explains the old replay-analysis path. It is retained to make rollback
+investigations reproducible, not to drive the final implementation.
+
+[CANDIDATE_TRACE_RULE]
+- trace_id = TRACE-CANDIDATE-1107
+- error_code = E-RETRY-CANDIDATE
+- action = "retry-later"
+- owner = "triage-desk"
+- severity = "sev4"
+- retry_after_minutes = "45"
+- status = "candidate-retry"
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_trace_replay_manifest_noise_block(index))
+    blocks.append(
+        """[WITHDRAWAL_FOOTER]
+withdrawn_by = active_trace_manifest.txt
+withdrawal_reason = post-lock review selected TRACE-KEEP-4821, TRACE-QUARANTINE-7712, and TRACE-AUDIT-3345
+"""
+    )
+    return "\n\n".join(blocks) + "\n"
+
+
+def _trace_candidate_state_notes(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# State Machine Candidate Notes
+
+notes_state = ROLLBACK_REHEARSAL
+This file contains realistic state-machine rows that were used for rehearsal only.
+Do not use rows from this file for trace_debug_delay.
+""",
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_trace_candidate_state_noise_block(index))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _trace_active_manifest_draft() -> str:
+    return """# Active Trace Manifest Draft
+
+draft_state = PRE_LOCK_DRAFT_DO_NOT_IMPLEMENT
+
+This filename is intentionally close to active_trace_manifest.txt, but this draft
+was replaced during post-lock review.
+
+Wrong draft composition:
+- action = "retry-later"
+- owner = "triage-desk"
+- marker = "TRACE-CANDIDATE-1107"
+- retry_after_minutes = "45"
 """
 
 
@@ -698,6 +1063,66 @@ observed_transition = queued -> validated -> retry_later
 
 Replay traces look similar to the production incident but are not actionable.
 Do not preserve TRACE-OBSOLETE markers in the final reconciliation rule.
+"""
+
+
+def _trace_default_packet_noise_block(index: int) -> str:
+    return f"""[default-triage-row-{index:04d}]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+tenant = aurora-ledger
+pipeline = delta-sync
+trace_id = TRACE-CANDIDATE-{index:04d}
+error_code = E-RETRY-CANDIDATE
+attempts = {1 + index % 3}
+Suggested handling before post-lock review:
+- action = "retry-later"
+- owner = "triage-desk"
+- severity = "sev4"
+- retry_after_minutes = "45"
+- status = "candidate-retry"
+- marker = "TRACE-CANDIDATE-{index:04d}"
+
+This row was superseded by the post-lock route marker near the end of the packet.
+"""
+
+
+def _trace_default_packet_repeated_rule(index: int) -> str:
+    return f"""[default-triage-repeat-{index:04d}]
+record_state = DEFAULT_ACTIVE_BEFORE_LOCK
+handoff_note = repeated candidate triage rule before post-lock errata
+- action = "retry-later"
+- owner = "triage-desk"
+- severity = "sev4"
+- retry_after_minutes = "45"
+- status = "candidate-retry"
+- marker = "TRACE-CANDIDATE-1107"
+"""
+
+
+def _trace_replay_manifest_noise_block(index: int) -> str:
+    return f"""[replay-analysis-row-{index:04d}]
+manifest_state = WITHDRAWN_AFTER_POST_LOCK_REVIEW
+trace_id = TRACE-CANDIDATE-{index:04d}
+error_code = E-RETRY-CANDIDATE
+candidate_action = retry-later
+candidate_owner = triage-desk
+candidate_status = candidate-retry
+This replay-analysis row resembles an active manifest row but was withdrawn.
+"""
+
+
+def _trace_candidate_state_noise_block(index: int) -> str:
+    return f"""[candidate-state-rehearsal-{index:04d}]
+rule_state = ROLLBACK_REHEARSAL
+Candidate handling:
+- action = "retry-later"
+- owner = "triage-desk"
+- severity = "sev4"
+- retry_after_minutes = "45"
+- status = "candidate-retry"
+- marker = "TRACE-CANDIDATE-{index:04d}"
+
+This candidate rule was replaced by the post-lock active state rules.
 """
 
 

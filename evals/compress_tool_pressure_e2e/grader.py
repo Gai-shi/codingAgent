@@ -43,6 +43,12 @@ CONFLICT_FORBIDDEN_VALUES = (
     "DRAFT_STATUS",
     "wrong-owner",
     "shadow-summary",
+    "KEEP-CANDIDATE-DEFAULT",
+    "POLICY-CANDIDATE",
+    "release-notes",
+    "candidate-ready",
+    "candidate-contract-carried",
+    "pending-post-lock-review",
 )
 
 TRACE_EXPECTED_VALUES = {
@@ -68,6 +74,10 @@ TRACE_FORBIDDEN_VALUES = (
     "defer-legacy-audit",
     "wrong-owner",
     "TRACE-OBSOLETE",
+    "TRACE-CANDIDATE",
+    "E-RETRY-CANDIDATE",
+    "triage-desk",
+    "candidate-retry",
 )
 
 
