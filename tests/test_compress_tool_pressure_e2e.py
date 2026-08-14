@@ -5,30 +5,71 @@ import unittest
 from pathlib import Path
 
 from evals.compress_tool_pressure_e2e.benchmark_case import (
+    CASE_CONFLICT_CONTRACT_DELAY,
+    CASE_TRACE_DEBUG_DELAY,
+    build_prompt_turns,
     create_case_workspace,
     noisy_evidence_text,
     prompt_stats,
 )
 from evals.compress_tool_pressure_e2e.grader import grade_target
 from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
+    EVAL_SYSTEM_PROMPT,
     _compare,
+    _summarize_suite,
     collect_run_diagnostics,
 )
 
 
 class CompressToolPressureE2ETest(unittest.TestCase):
-    def test_fixture_contains_large_noisy_evidence_and_unimplemented_report(self):
+    def test_conflict_fixture_keeps_compatible_default_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             target = create_case_workspace(Path(tmp_dir), force=True, noise_blocks=3)
 
-            evidence = (target / "evidence" / "noisy_audit_log.txt").read_text(encoding="utf-8")
+            decisions = (target / "evidence" / "contract_decisions.txt").read_text(encoding="utf-8")
+            overrides = (target / "evidence" / "release_overrides.txt").read_text(encoding="utf-8")
             report = (target / "auditor" / "report.py").read_text(encoding="utf-8")
+            manifest = (target / ".ai_job_eval_case.json").read_text(encoding="utf-8")
 
-        self.assertIn("KEEP-COMPRESS-TOOL-9173", evidence)
-        self.assertIn("OBSOLETE_MARKER_0001", evidence)
+        self.assertIn("KEEP-COMPRESS-TOOL-9173", decisions)
+        self.assertIn("OBSOLETE_MARKER_0001", decisions)
+        self.assertIn("compress-tool-preserved", overrides)
         self.assertIn("return {}", report)
+        self.assertIn(CASE_CONFLICT_CONTRACT_DELAY, manifest)
 
-    def test_grader_accepts_canonical_report_and_rejects_unimplemented_fixture(self):
+    def test_trace_debug_fixture_contains_delayed_trace_rule(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = create_case_workspace(
+                Path(tmp_dir),
+                force=True,
+                noise_blocks=2,
+                case_id=CASE_TRACE_DEBUG_DELAY,
+                pressure="smoke",
+            )
+
+            production_trace = (target / "evidence" / "production_trace.log").read_text(encoding="utf-8")
+            notes = (target / "evidence" / "state_machine_notes.txt").read_text(encoding="utf-8")
+            decision = (target / "reconciler" / "decision.py").read_text(encoding="utf-8")
+
+        self.assertIn("TRACE-KEEP-4821", production_trace)
+        self.assertIn("TRACE-OBSOLETE-0001", production_trace)
+        self.assertIn("open-manual-review", notes)
+        self.assertIn('"action": "monitor"', decision)
+
+    def test_prompts_do_not_name_compress_tool(self):
+        for case_id in (CASE_CONFLICT_CONTRACT_DELAY, CASE_TRACE_DEBUG_DELAY):
+            turns = build_prompt_turns(case_id=case_id, pressure="hard")
+            joined = "\n".join(turn.text for turn in turns)
+
+            self.assertNotIn("compress_tool", joined)
+            self.assertNotIn("压缩", joined)
+
+    def test_eval_system_prompt_is_tool_neutral(self):
+        self.assertNotIn("compress_tool", EVAL_SYSTEM_PROMPT)
+        self.assertNotIn("压缩", EVAL_SYSTEM_PROMPT)
+        self.assertIn("very long", EVAL_SYSTEM_PROMPT)
+
+    def test_conflict_grader_accepts_exact_hidden_contract_and_rejects_unimplemented_fixture(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             target = create_case_workspace(Path(tmp_dir), force=True, noise_blocks=1)
 
@@ -49,7 +90,9 @@ def build_report() -> dict[str, str]:
         "policy_code": "POLICY-COMPRESS-42",
         "owner": "context-quality",
         "status": "ready-for-review",
-        "summary": "compress-tool-preserved final facts",
+        "summary": "compress-tool-preserved KEEP-COMPRESS-TOOL-9173",
+        "risk_level": "elevated",
+        "review_window": "2026-W33",
     }
 ''',
                 encoding="utf-8",
@@ -59,11 +102,63 @@ def build_report() -> dict[str, str]:
 
         self.assertTrue(passed.passed, passed)
 
-    def test_prompt_stats_reports_evidence_pressure_size(self):
+    def test_trace_grader_accepts_exact_hidden_rule(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = create_case_workspace(
+                Path(tmp_dir),
+                force=True,
+                noise_blocks=1,
+                case_id=CASE_TRACE_DEBUG_DELAY,
+            )
+
+            failed = grade_target(target, run_tests=False)
+            self.assertFalse(failed.passed)
+            self.assertIn("preserves action: open-manual-review", failed.missing_required)
+
+            (target / "reconciler" / "decision.py").write_text(
+                '''"""Build reconciliation plans for production trace events."""
+
+from __future__ import annotations
+
+
+def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
+    if (
+        event.get("tenant") == "aurora-ledger"
+        and event.get("pipeline") == "delta-sync"
+        and event.get("error_code") == "E-RETRY-9173"
+        and int(event.get("attempts", "0")) >= 3
+    ):
+        return {
+            "action": "open-manual-review",
+            "owner": "ledger-quality",
+            "severity": "sev2",
+            "retry_after_minutes": "0",
+            "status": "blocked-on-ledger-review",
+            "marker": event.get("trace_id", "TRACE-KEEP-4821"),
+        }
+    return {
+        "action": "monitor",
+        "owner": "triage",
+        "severity": "baseline",
+        "retry_after_minutes": "15",
+        "status": "watching",
+        "marker": event.get("trace_id", ""),
+    }
+''',
+                encoding="utf-8",
+            )
+
+            passed = grade_target(target)
+
+        self.assertTrue(passed.passed, passed)
+
+    def test_prompt_stats_reports_case_pressure_and_compatible_noise_size(self):
         turns = []
 
         stats = prompt_stats(turns, noise_blocks=2)
 
+        self.assertEqual(stats["case_id"], CASE_CONFLICT_CONTRACT_DELAY)
+        self.assertEqual(stats["pressure"], "hard")
         self.assertEqual(stats["noise_blocks"], 2)
         self.assertEqual(stats["evidence_chars"], len(noisy_evidence_text(noise_blocks=2)))
 
@@ -82,7 +177,7 @@ def build_report() -> dict[str, str]:
 ## 10:00:01 ToolCall read_file
 
 ```json
-{"id": "call-read", "name": "read_file", "arguments": {"path": "evidence/noisy_audit_log.txt"}}
+{"id": "call-read", "name": "read_file", "arguments": {"path": "evidence/contract_decisions.txt"}}
 ```
 
 ## 10:00:02 ToolResult read_file
@@ -94,7 +189,7 @@ abcdefghijklmnopqrstuvwxyz
 ## 10:00:03 ToolCall compress_tool
 
 ```json
-{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_name": "read_file", "tool_arguments": {"path": "evidence/noisy_audit_log.txt"}, "replace_content": "abc"}]}}
+{"id": "call-compress", "name": "compress_tool", "arguments": {"replacements": [{"tool_name": "read_file", "tool_arguments": {"path": "evidence/contract_decisions.txt"}, "replace_content": "abc"}]}}
 ```
 
 ## 10:00:04 ToolResult compress_tool
@@ -173,7 +268,7 @@ small
 ## 10:00:01 ToolCall read_file
 
 ```json
-{"id": "call-read", "name": "read_file", "arguments": {"path": "evidence/noisy_audit_log.txt"}}
+{"id": "call-read", "name": "read_file", "arguments": {"path": "evidence/contract_decisions.txt"}}
 ```
 
 ## 10:00:02 ToolResult read_file
@@ -253,6 +348,50 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertFalse(comparison["compress_tool_helped"])
         self.assertTrue(comparison["both_passed"])
         self.assertEqual(comparison["verdict"], "inconclusive_enabled_compress_tool_failed")
+
+    def test_summarize_suite_reports_correctness_and_efficiency_counters(self):
+        cases = {
+            "case_a": {
+                "hard": {
+                    "enabled": {"grade": {"passed": True, "score": 100}, "elapsed_seconds": 10},
+                    "disabled": {"grade": {"passed": False, "score": 40}, "elapsed_seconds": 12},
+                    "comparison": {
+                        "compress_tool_helped": True,
+                        "both_passed": False,
+                        "both_failed": False,
+                        "compress_tool_regressed": False,
+                        "enabled_compress_tool_effective": True,
+                        "enabled_compress_tool_call_count": 2,
+                        "enabled_estimated_tool_context_chars_saved": 1000,
+                    },
+                }
+            },
+            "case_b": {
+                "hard": {
+                    "enabled": {"grade": {"passed": True, "score": 90}, "elapsed_seconds": 9},
+                    "disabled": {"grade": {"passed": True, "score": 80}, "elapsed_seconds": 8},
+                    "comparison": {
+                        "compress_tool_helped": False,
+                        "both_passed": True,
+                        "both_failed": False,
+                        "compress_tool_regressed": False,
+                        "enabled_compress_tool_effective": False,
+                        "enabled_compress_tool_call_count": 0,
+                        "enabled_estimated_tool_context_chars_saved": 0,
+                    },
+                }
+            },
+        }
+
+        summary = _summarize_suite(cases)
+
+        self.assertEqual(summary["cell_count"], 2)
+        self.assertEqual(summary["enabled_pass_count"], 2)
+        self.assertEqual(summary["disabled_pass_count"], 1)
+        self.assertEqual(summary["correctness_delta"], 1)
+        self.assertEqual(summary["compress_tool_helped_count"], 1)
+        self.assertEqual(summary["enabled_compress_tool_effective_count"], 1)
+        self.assertEqual(summary["enabled_estimated_tool_context_chars_saved"], 1000)
 
 
 if __name__ == "__main__":

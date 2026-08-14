@@ -1,4 +1,4 @@
-"""Fixture and prompts for the compress_tool real-LLM pressure eval."""
+"""Fixtures and prompts for the compress_tool natural pressure eval suite."""
 
 from __future__ import annotations
 
@@ -10,8 +10,18 @@ from pathlib import Path
 from typing import Sequence
 
 
-CASE_ID = "compress_tool_pressure_v1"
-DEFAULT_NOISE_BLOCKS = 420
+CASE_CONFLICT_CONTRACT_DELAY = "conflict_contract_delay"
+CASE_TRACE_DEBUG_DELAY = "trace_debug_delay"
+CASE_IDS = (CASE_CONFLICT_CONTRACT_DELAY, CASE_TRACE_DEBUG_DELAY)
+CASE_ID = CASE_CONFLICT_CONTRACT_DELAY
+
+DEFAULT_PRESSURE = "hard"
+DEFAULT_NOISE_BLOCKS = 760
+PRESSURE_NOISE_BLOCKS = {
+    "smoke": 12,
+    "medium": 260,
+    "hard": DEFAULT_NOISE_BLOCKS,
+}
 
 
 @dataclass(frozen=True)
@@ -20,28 +30,82 @@ class PromptTurn:
     text: str
 
 
-def create_case_workspace(root: Path, *, force: bool = False, noise_blocks: int = DEFAULT_NOISE_BLOCKS) -> Path:
+@dataclass(frozen=True)
+class PressureConfig:
+    name: str
+    noise_blocks: int
+
+
+def pressure_names(selection: str) -> list[str]:
+    if selection == "all":
+        return list(PRESSURE_NOISE_BLOCKS)
+    if selection not in PRESSURE_NOISE_BLOCKS:
+        raise ValueError(f"unknown pressure: {selection}")
+    return [selection]
+
+
+def resolve_pressure_config(
+    pressure: str = DEFAULT_PRESSURE,
+    *,
+    noise_blocks: int | None = None,
+) -> PressureConfig:
+    if pressure not in PRESSURE_NOISE_BLOCKS:
+        raise ValueError(f"unknown pressure: {pressure}")
+    resolved_noise_blocks = PRESSURE_NOISE_BLOCKS[pressure] if noise_blocks is None else noise_blocks
+    if resolved_noise_blocks < 0:
+        raise ValueError("noise_blocks must be non-negative")
+    return PressureConfig(name=pressure, noise_blocks=resolved_noise_blocks)
+
+
+def create_case_workspace(
+    root: Path,
+    *,
+    force: bool = False,
+    noise_blocks: int | None = None,
+    case_id: str = CASE_ID,
+    pressure: str = DEFAULT_PRESSURE,
+) -> Path:
+    config = resolve_pressure_config(pressure, noise_blocks=noise_blocks)
     target = root / "target_repo"
     if target.exists():
         if not force:
             raise FileExistsError(f"target repo already exists: {target}")
         shutil.rmtree(target)
 
-    (target / "auditor").mkdir(parents=True)
-    (target / "evidence").mkdir()
-    (target / "tests").mkdir()
+    if case_id == CASE_CONFLICT_CONTRACT_DELAY:
+        _create_conflict_contract_workspace(target, config)
+    elif case_id == CASE_TRACE_DEBUG_DELAY:
+        _create_trace_debug_workspace(target, config)
+    else:
+        raise ValueError(f"unknown case_id: {case_id}")
 
-    _write(target / "auditor" / "__init__.py", '"""Audit fixture package."""\n')
-    _write(target / "auditor" / "report.py", _report_py())
-    _write(target / "tests" / "test_report.py", _test_report_py())
-    _write(target / "evidence" / "noisy_audit_log.txt", noisy_evidence_text(noise_blocks=noise_blocks))
-    _write(target / "README.md", _target_readme_md())
+    _write(
+        target / ".ai_job_eval_case.json",
+        json.dumps(
+            {
+                "case_id": case_id,
+                "pressure": config.name,
+                "noise_blocks": config.noise_blocks,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
     _write(target / ".gitignore", "__pycache__/\n*.pyc\n")
     return target
 
 
-def build_prompt_turns() -> list[PromptTurn]:
-    return [PromptTurn(kind="final_task", text=final_task_prompt())]
+def build_prompt_turns(
+    *,
+    case_id: str = CASE_ID,
+    pressure: str = DEFAULT_PRESSURE,
+) -> list[PromptTurn]:
+    if case_id == CASE_CONFLICT_CONTRACT_DELAY:
+        return _conflict_contract_prompt_turns()
+    if case_id == CASE_TRACE_DEBUG_DELAY:
+        return _trace_debug_prompt_turns()
+    raise ValueError(f"unknown case_id: {case_id}")
 
 
 def write_prompt_artifacts(root: Path, turns: Sequence[PromptTurn]) -> Path:
@@ -60,87 +124,226 @@ def prompt_texts(turns: Sequence[PromptTurn]) -> list[str]:
     return [turn.text for turn in turns]
 
 
-def prompt_stats(turns: Sequence[PromptTurn], *, noise_blocks: int) -> dict[str, object]:
+def prompt_stats(
+    turns: Sequence[PromptTurn],
+    *,
+    noise_blocks: int | None = None,
+    case_id: str = CASE_ID,
+    pressure: str = DEFAULT_PRESSURE,
+) -> dict[str, object]:
+    config = resolve_pressure_config(pressure, noise_blocks=noise_blocks)
     prompts = prompt_texts(turns)
-    evidence = noisy_evidence_text(noise_blocks=noise_blocks)
     return {
+        "case_id": case_id,
+        "pressure": config.name,
         "turn_count": len(turns),
         "prompt_chars": sum(len(text) for text in prompts),
-        "evidence_chars": len(evidence),
-        "noise_blocks": noise_blocks,
+        "evidence_chars": evidence_chars(case_id=case_id, noise_blocks=config.noise_blocks),
+        "noise_blocks": config.noise_blocks,
     }
 
 
-def final_task_prompt() -> str:
-    return """请完成当前 workspace 里的 auditor 报告实现。
-
-强制流程：
-
-1. 你必须先读取 evidence/noisy_audit_log.txt。
-2. 这个 evidence 文件很长，包含大量废弃方案和少量 FINAL_CONTRACT 信息。
-3. 读取后，如果你有 compress_tool，请用它把 read_file 的工具输出压缩成只包含 FINAL_CONTRACT、禁止项、文件路径和测试相关事实的摘要。
-4. 然后实现 auditor/report.py，让 tests/ 下的单测通过。
-
-任务约束：
-
-- 不要凭空猜测最终常量；必须从 evidence/noisy_audit_log.txt 里恢复。
-- 不要使用 evidence 里的 OBSOLETE_*、LEGACY_*、DRAFT_* 信息。
-- 当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
-- 不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
-
-完成后简要说明改了哪些文件。"""
+def evidence_chars(*, case_id: str = CASE_ID, noise_blocks: int = DEFAULT_NOISE_BLOCKS) -> int:
+    if case_id == CASE_CONFLICT_CONTRACT_DELAY:
+        return len(noisy_evidence_text(noise_blocks=noise_blocks))
+    if case_id == CASE_TRACE_DEBUG_DELAY:
+        return len(_trace_production_log(noise_blocks=noise_blocks)) + len(
+            _trace_state_machine_notes(noise_blocks=noise_blocks)
+        )
+    raise ValueError(f"unknown case_id: {case_id}")
 
 
 def noisy_evidence_text(*, noise_blocks: int = DEFAULT_NOISE_BLOCKS) -> str:
-    blocks: list[str] = [_final_contract_block("early")]
+    return (
+        _conflict_contract_decisions(noise_blocks=noise_blocks)
+        + "\n\n"
+        + _conflict_release_overrides(noise_blocks=noise_blocks)
+    )
+
+
+def _create_conflict_contract_workspace(target: Path, config: PressureConfig) -> None:
+    (target / "auditor").mkdir(parents=True)
+    (target / "evidence").mkdir()
+    (target / "tests").mkdir()
+
+    _write(target / "auditor" / "__init__.py", '"""Audit fixture package."""\n')
+    _write(target / "auditor" / "report.py", _conflict_report_py())
+    _write(target / "tests" / "test_report.py", _conflict_test_report_py())
+    _write(
+        target / "evidence" / "contract_decisions.txt",
+        _conflict_contract_decisions(noise_blocks=config.noise_blocks),
+    )
+    _write(
+        target / "evidence" / "release_overrides.txt",
+        _conflict_release_overrides(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "README.md", _conflict_readme_md())
+
+
+def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
+    (target / "reconciler").mkdir(parents=True)
+    (target / "evidence").mkdir()
+    (target / "tests").mkdir()
+
+    _write(target / "reconciler" / "__init__.py", '"""Trace reconciliation fixture package."""\n')
+    _write(target / "reconciler" / "decision.py", _trace_decision_py())
+    _write(target / "tests" / "test_decision.py", _trace_test_decision_py())
+    _write(
+        target / "evidence" / "production_trace.log",
+        _trace_production_log(noise_blocks=config.noise_blocks),
+    )
+    _write(
+        target / "evidence" / "state_machine_notes.txt",
+        _trace_state_machine_notes(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "README.md", _trace_readme_md())
+
+
+def _conflict_contract_prompt_turns() -> list[PromptTurn]:
+    return [
+        PromptTurn(
+            kind="evidence_research",
+            text="""请先做证据调研。
+
+必须读取 evidence/contract_decisions.txt 和 evidence/release_overrides.txt。
+这两份材料很长，包含互相冲突的历史方案、候选方案和回滚记录。
+本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
+        ),
+        PromptTurn(
+            kind="implementation",
+            text="""现在完成实现。
+
+不要重新读取 evidence 目录；直接使用上一轮证据调研得到的有效最终契约。
+请读取 README.md、auditor/report.py 和 tests/，然后实现 auditor/report.py 里的 build_report()。
+不要使用废弃、候选、回滚或错误 owner 的值。
+当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
+不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
+完成后简要说明改了哪些文件。""",
+        ),
+    ]
+
+
+def _trace_debug_prompt_turns() -> list[PromptTurn]:
+    return [
+        PromptTurn(
+            kind="trace_research",
+            text="""请先做生产 trace 调研。
+
+必须读取 evidence/production_trace.log 和 evidence/state_machine_notes.txt。
+这两份材料很长，包含大量相似 incident、过期状态机规则和少量仍然有效的处理规则。
+本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
+        ),
+        PromptTurn(
+            kind="debug_fix",
+            text="""现在修复代码。
+
+不要重新读取 evidence 目录；直接使用上一轮 trace 调研得到的有效规则。
+请读取 README.md、reconciler/decision.py 和 tests/，然后修复 build_reconciliation_plan()。
+不要使用废弃、候选、回滚或错误 owner 的处理规则。
+当前 ai_job 的 apply_patch 工具只接受标准 git diff 文本，必须以 diff --git 文件头组织 patch。
+不要把 "*** Begin Patch" / "*** End Patch" 格式传给 apply_patch 工具。
+完成后简要说明改了哪些文件。""",
+        ),
+    ]
+
+
+def _conflict_contract_decisions(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Contract Decision Journal
+
+Interpretation rule:
+- Prefer records whose channel is release-2026.08.
+- Ignore DRAFT, CANDIDATE, OBSOLETE, ROLLED_BACK, and SHADOW records.
+- A HOTFIX record overrides an earlier FINAL record only when the same marker is repeated.
+""",
+        _conflict_core_contract_block("early"),
+    ]
     for index in range(1, noise_blocks + 1):
-        blocks.append(_noise_block(index))
+        blocks.append(_conflict_decision_noise_block(index))
         if index == max(1, noise_blocks // 2):
-            blocks.append(_final_contract_block("middle"))
-    blocks.append(_final_contract_block("late"))
+            blocks.append(_conflict_core_contract_block("middle"))
+    blocks.append(_conflict_core_contract_block("late"))
     return "\n\n".join(blocks) + "\n"
 
 
-def _final_contract_block(label: str) -> str:
-    return f"""[FINAL_CONTRACT::{label}]
-These are the only valid values for the final implementation:
+def _conflict_release_overrides(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Release Override Ledger
+
+Only override rows marked ACTIVE_FOR_RELEASE are valid for the final implementation.
+Rows marked SHADOW_FINAL are rehearsal data and must not be used.
+""",
+        _conflict_override_block("early"),
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_conflict_override_noise_block(index))
+        if index == max(1, noise_blocks // 3):
+            blocks.append(_conflict_override_block("middle"))
+    blocks.append(_conflict_override_block("late"))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _conflict_core_contract_block(label: str) -> str:
+    return f"""[FINAL_CONTRACT_CORE::{label}]
+channel = release-2026.08
+record_state = ACTIVE_FOR_RELEASE
+These values are valid for auditor.report.build_report:
 - REPORT_TITLE = "Q4-COMPRESS-AUDIT"
 - REQUIRED_MARKER = "KEEP-COMPRESS-TOOL-9173"
 - POLICY_CODE = "POLICY-COMPRESS-42"
+- RISK_LEVEL = "elevated"
+
+The implementation must expose build_report() -> dict[str, str].
+Do not copy OBSOLETE_MARKER, LEGACY_POLICY, DRAFT_STATUS, wrong-owner, or shadow-summary values.
+"""
+
+
+def _conflict_override_block(label: str) -> str:
+    return f"""[HOTFIX_CONTRACT_OVERRIDE::{label}]
+channel = release-2026.08
+record_state = ACTIVE_FOR_RELEASE
+marker = KEEP-COMPRESS-TOOL-9173
+Valid override values:
 - OWNER = "context-quality"
 - FINAL_STATUS = "ready-for-review"
 - SUMMARY_PREFIX = "compress-tool-preserved"
+- REVIEW_WINDOW = "2026-W33"
 
-Implementation requirements:
-- auditor/report.py must expose build_report() -> dict[str, str].
-- build_report()["title"] must equal REPORT_TITLE.
-- build_report()["marker"] must equal REQUIRED_MARKER.
-- build_report()["policy_code"] must equal POLICY_CODE.
-- build_report()["owner"] must equal OWNER.
-- build_report()["status"] must equal FINAL_STATUS.
-- build_report()["summary"] must start with SUMMARY_PREFIX.
-- The implementation must not include OBSOLETE_MARKER, LEGACY_POLICY, DRAFT_STATUS, or wrong-owner.
+Summary must start with SUMMARY_PREFIX and mention REQUIRED_MARKER.
 """
 
 
-def _noise_block(index: int) -> str:
-    return f"""[obsolete-block-{index:04d}]
-This block is intentionally noisy and obsolete.
-Old proposal:
+def _conflict_decision_noise_block(index: int) -> str:
+    return f"""[contract-candidate-{index:04d}]
+record_state = SHADOW_FINAL
+channel = release-2026.08-draft
+This block is intentionally plausible but invalid.
 - REPORT_TITLE = "OBSOLETE-AUDIT-{index:04d}"
 - REQUIRED_MARKER = "OBSOLETE_MARKER_{index:04d}"
 - POLICY_CODE = "LEGACY_POLICY_{index:04d}"
-- OWNER = "wrong-owner"
-- FINAL_STATUS = "DRAFT_STATUS_{index:04d}"
-- SUMMARY_PREFIX = "legacy-summary-{index:04d}"
+- RISK_LEVEL = "low"
 
-Deprecated notes:
-The old implementation returned a plain string, stored report data in JSON, and ignored tests.
-Do not use this block. It exists only to make the tool output large enough to require compression.
+Historical note:
+The old implementation returned a plain string, stored report data in JSON, and ignored the review window.
+This record was rolled back after validation drift and must not affect the final implementation.
 """
 
 
-def _report_py() -> str:
+def _conflict_override_noise_block(index: int) -> str:
+    return f"""[release-override-shadow-{index:04d}]
+record_state = ROLLED_BACK
+marker = OBSOLETE_MARKER_{index:04d}
+Candidate override values:
+- OWNER = "wrong-owner"
+- FINAL_STATUS = "DRAFT_STATUS_{index:04d}"
+- SUMMARY_PREFIX = "shadow-summary-{index:04d}"
+- REVIEW_WINDOW = "2025-W{index % 52:02d}"
+
+This row resembles a final override, but it was superseded before release lock.
+"""
+
+
+def _conflict_report_py() -> str:
     return '''"""Report builder to be implemented by the agent."""
 
 from __future__ import annotations
@@ -152,7 +355,7 @@ def build_report() -> dict[str, str]:
 '''
 
 
-def _test_report_py() -> str:
+def _conflict_test_report_py() -> str:
     return '''from __future__ import annotations
 
 import unittest
@@ -160,24 +363,33 @@ import unittest
 from auditor.report import build_report
 
 
-class ReportTest(unittest.TestCase):
-    def test_build_report_preserves_final_contract(self):
+class ReportShapeTest(unittest.TestCase):
+    def test_build_report_has_required_shape(self):
         report = build_report()
 
-        self.assertEqual(report["title"], "Q4-COMPRESS-AUDIT")
-        self.assertEqual(report["marker"], "KEEP-COMPRESS-TOOL-9173")
-        self.assertEqual(report["policy_code"], "POLICY-COMPRESS-42")
-        self.assertEqual(report["owner"], "context-quality")
-        self.assertEqual(report["status"], "ready-for-review")
-        self.assertTrue(report["summary"].startswith("compress-tool-preserved"))
+        required_keys = {
+            "title",
+            "marker",
+            "policy_code",
+            "owner",
+            "status",
+            "summary",
+            "risk_level",
+            "review_window",
+        }
+        self.assertEqual(set(report), required_keys)
+        for key in required_keys:
+            self.assertIsInstance(report[key], str)
+            self.assertTrue(report[key])
 
-    def test_build_report_avoids_obsolete_values(self):
+    def test_build_report_avoids_known_obsolete_prefixes(self):
         text = repr(build_report())
 
         self.assertNotIn("OBSOLETE_MARKER", text)
         self.assertNotIn("LEGACY_POLICY", text)
         self.assertNotIn("DRAFT_STATUS", text)
         self.assertNotIn("wrong-owner", text)
+        self.assertNotIn("shadow-summary", text)
 
 
 if __name__ == "__main__":
@@ -185,11 +397,180 @@ if __name__ == "__main__":
 '''
 
 
-def _target_readme_md() -> str:
-    return """# Compress Tool Pressure Fixture
+def _conflict_readme_md() -> str:
+    return """# Conflict Contract Delay Fixture
 
-Implement `auditor.report.build_report()` using the final contract hidden inside
-`evidence/noisy_audit_log.txt`.
+Implement `auditor.report.build_report()` from the valid release contract found
+during the evidence research phase.
+"""
+
+
+def _trace_production_log(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# Production Trace Archive
+
+Interpretation rule:
+- The active incident belongs to tenant aurora-ledger and pipeline delta-sync.
+- Ignore replay, dry-run, sandbox, and rollback traces.
+- Trace notes are noisy; only CONFIRMED_PRODUCTION_TRACE records are actionable.
+""",
+        _trace_confirmed_incident_block("early"),
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_trace_noise_block(index))
+        if index == max(1, noise_blocks // 2):
+            blocks.append(_trace_confirmed_incident_block("middle"))
+    blocks.append(_trace_confirmed_incident_block("late"))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _trace_state_machine_notes(*, noise_blocks: int) -> str:
+    blocks: list[str] = [
+        """# State Machine Notes
+
+Only ACTIVE_STATE_RULE entries are valid. Candidate and rollback rules are examples from older incidents.
+""",
+        _trace_active_rule_block("early"),
+    ]
+    for index in range(1, noise_blocks + 1):
+        blocks.append(_trace_rule_noise_block(index))
+        if index == max(1, noise_blocks // 3):
+            blocks.append(_trace_active_rule_block("middle"))
+    blocks.append(_trace_active_rule_block("late"))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _trace_confirmed_incident_block(label: str) -> str:
+    return f"""[CONFIRMED_PRODUCTION_TRACE::{label}]
+tenant = aurora-ledger
+pipeline = delta-sync
+trace_id = TRACE-KEEP-4821
+error_code = E-RETRY-9173
+attempts = 3
+observed_transition = queued -> validated -> retry_timeout -> manual_review_required
+release_channel = release-2026.08
+
+The trace_id must be preserved as the marker in the reconciliation plan.
+"""
+
+
+def _trace_active_rule_block(label: str) -> str:
+    return f"""[ACTIVE_STATE_RULE::{label}]
+Applies when:
+- tenant == "aurora-ledger"
+- pipeline == "delta-sync"
+- error_code == "E-RETRY-9173"
+- attempts >= 3
+
+Return plan values:
+- action = "open-manual-review"
+- owner = "ledger-quality"
+- severity = "sev2"
+- retry_after_minutes = "0"
+- status = "blocked-on-ledger-review"
+- marker = trace_id
+"""
+
+
+def _trace_noise_block(index: int) -> str:
+    return f"""[trace-replay-{index:04d}]
+trace_state = replay
+tenant = sandbox-ledger-{index:04d}
+pipeline = delta-sync
+trace_id = TRACE-OBSOLETE-{index:04d}
+error_code = E-LEGACY-{index:04d}
+attempts = {index % 5}
+observed_transition = queued -> validated -> retry_later
+
+Replay traces look similar to the production incident but are not actionable.
+Do not preserve TRACE-OBSOLETE markers in the final reconciliation rule.
+"""
+
+
+def _trace_rule_noise_block(index: int) -> str:
+    return f"""[candidate-state-rule-{index:04d}]
+rule_state = ROLLED_BACK
+Candidate handling:
+- action = "retry-later"
+- owner = "wrong-owner"
+- severity = "sev4"
+- retry_after_minutes = "{15 + index % 45}"
+- status = "legacy-retry"
+- marker = "TRACE-OBSOLETE-{index:04d}"
+
+This rule was retired because it retried ledger failures after the manual-review threshold.
+"""
+
+
+def _trace_decision_py() -> str:
+    return '''"""Build reconciliation plans for production trace events."""
+
+from __future__ import annotations
+
+
+def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
+    """Return the reconciliation plan for a trace event."""
+    return {
+        "action": "monitor",
+        "owner": "triage",
+        "severity": "sev4",
+        "retry_after_minutes": "15",
+        "status": "watching",
+        "marker": event.get("trace_id", ""),
+    }
+'''
+
+
+def _trace_test_decision_py() -> str:
+    return '''from __future__ import annotations
+
+import unittest
+
+from reconciler.decision import build_reconciliation_plan
+
+
+class ReconciliationPlanShapeTest(unittest.TestCase):
+    def test_plan_has_stable_shape(self):
+        plan = build_reconciliation_plan(
+            {
+                "tenant": "sandbox",
+                "pipeline": "demo",
+                "trace_id": "TRACE-DEMO",
+                "error_code": "E-DEMO",
+                "attempts": "0",
+            }
+        )
+
+        self.assertEqual(
+            set(plan),
+            {
+                "action",
+                "owner",
+                "severity",
+                "retry_after_minutes",
+                "status",
+                "marker",
+            },
+        )
+        for value in plan.values():
+            self.assertIsInstance(value, str)
+
+    def test_plan_preserves_input_trace_id_as_marker(self):
+        plan = build_reconciliation_plan({"trace_id": "TRACE-DEMO"})
+
+        self.assertEqual(plan["marker"], "TRACE-DEMO")
+
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+
+
+def _trace_readme_md() -> str:
+    return """# Trace Debug Delay Fixture
+
+Fix `reconciler.decision.build_reconciliation_plan()` using the active
+production trace rule found during the evidence research phase.
 """
 
 
@@ -202,15 +583,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create compress_tool pressure eval fixture.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--noise-blocks", type=int, default=DEFAULT_NOISE_BLOCKS)
+    parser.add_argument("--case-id", choices=CASE_IDS, default=CASE_ID)
+    parser.add_argument("--pressure", choices=tuple(PRESSURE_NOISE_BLOCKS), default=DEFAULT_PRESSURE)
+    parser.add_argument("--noise-blocks", type=int, default=None)
     args = parser.parse_args(argv)
 
     root = Path(args.output).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
-    target = create_case_workspace(root, force=args.force, noise_blocks=args.noise_blocks)
-    turns = build_prompt_turns()
+    target = create_case_workspace(
+        root,
+        force=args.force,
+        noise_blocks=args.noise_blocks,
+        case_id=args.case_id,
+        pressure=args.pressure,
+    )
+    turns = build_prompt_turns(case_id=args.case_id, pressure=args.pressure)
     write_prompt_artifacts(root, turns)
-    print(json.dumps({"target": str(target), "prompt_stats": prompt_stats(turns, noise_blocks=args.noise_blocks)}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "target": str(target),
+                "prompt_stats": prompt_stats(
+                    turns,
+                    noise_blocks=args.noise_blocks,
+                    case_id=args.case_id,
+                    pressure=args.pressure,
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

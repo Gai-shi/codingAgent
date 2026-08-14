@@ -1,4 +1,4 @@
-"""Run a real ai_job A/B pressure eval for compress_tool."""
+"""Run a real ai_job A/B pressure eval suite for compress_tool."""
 
 from __future__ import annotations
 
@@ -18,8 +18,12 @@ from typing import Iterator, Sequence, TextIO
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from benchmark_case import (
+        CASE_IDS,
+        DEFAULT_PRESSURE,
+        PRESSURE_NOISE_BLOCKS,
         build_prompt_turns,
         create_case_workspace,
+        pressure_names,
         prompt_stats,
         prompt_texts,
         write_prompt_artifacts,
@@ -27,13 +31,24 @@ if __package__ in (None, ""):
     from grader import grade_target
 else:
     from .benchmark_case import (
+        CASE_IDS,
+        DEFAULT_PRESSURE,
+        PRESSURE_NOISE_BLOCKS,
         build_prompt_turns,
         create_case_workspace,
+        pressure_names,
         prompt_stats,
         prompt_texts,
         write_prompt_artifacts,
     )
     from .grader import grade_target
+
+
+EVAL_SYSTEM_PROMPT = """You are a careful coding agent.
+When tool output is very long, actively preserve only the task-relevant facts needed for later steps.
+Do not keep bulky raw evidence in working context when a compact replacement is available.
+The user prompt is the source of task requirements; do not invent values that were not found in workspace evidence.
+Use tools when you need workspace information, then implement the smallest correct code change."""
 
 
 @dataclass(frozen=True)
@@ -47,7 +62,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run compress_tool pressure A/B eval against ai_job.")
     parser.add_argument("--output", required=True, help="Benchmark output directory.")
     parser.add_argument("--force", action="store_true", help="Replace output directory if it exists.")
-    parser.add_argument("--noise-blocks", type=int, default=420)
+    parser.add_argument("--case-id", choices=tuple(["all", *CASE_IDS]), default="all")
+    parser.add_argument("--pressure", choices=tuple(["all", *PRESSURE_NOISE_BLOCKS]), default=DEFAULT_PRESSURE)
+    parser.add_argument(
+        "--noise-blocks",
+        type=int,
+        default=None,
+        help=(
+            "Compatibility override for generated evidence size. When omitted, each pressure "
+            "uses its configured default."
+        ),
+    )
     parser.add_argument(
         "--ai-job-command",
         default=f"{sys.executable} -m ai_job",
@@ -70,6 +95,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=1.0)
     parser.add_argument("--no-progress", action="store_true")
+    parser.add_argument(
+        "--system-prompt",
+        default=EVAL_SYSTEM_PROMPT,
+        help=(
+            "System prompt used during the eval. The default is tool-neutral and "
+            "does not name compress_tool."
+        ),
+    )
     args = parser.parse_args(argv)
 
     output = Path(args.output).expanduser().resolve()
@@ -79,26 +112,66 @@ def main(argv: Sequence[str] | None = None) -> int:
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
 
-    turns = build_prompt_turns()
-    write_prompt_artifacts(output, turns)
+    case_ids = list(CASE_IDS) if args.case_id == "all" else [args.case_id]
+    selected_pressures = pressure_names(args.pressure)
 
-    enabled = _run_variant(args, output=output, turns=turns, variant="enabled", disable_compress_tool=False)
-    disabled = _run_variant(args, output=output, turns=turns, variant="disabled", disable_compress_tool=True)
-    comparison = _compare(enabled, disabled)
+    cases: dict[str, dict[str, object]] = {}
+    for case_id in case_ids:
+        case_results: dict[str, object] = {}
+        for pressure in selected_pressures:
+            case_pressure_output = output / case_id / pressure
+            case_pressure_output.mkdir(parents=True, exist_ok=True)
+            turns = build_prompt_turns(case_id=case_id, pressure=pressure)
+            write_prompt_artifacts(case_pressure_output, turns)
+
+            enabled = _run_variant(
+                args,
+                output=case_pressure_output,
+                turns=turns,
+                variant="enabled",
+                disable_compress_tool=False,
+                case_id=case_id,
+                pressure=pressure,
+            )
+            disabled = _run_variant(
+                args,
+                output=case_pressure_output,
+                turns=turns,
+                variant="disabled",
+                disable_compress_tool=True,
+                case_id=case_id,
+                pressure=pressure,
+            )
+            comparison = _compare(enabled, disabled)
+            case_results[pressure] = {
+                "case_id": case_id,
+                "pressure": pressure,
+                "prompt_stats": prompt_stats(
+                    turns,
+                    noise_blocks=args.noise_blocks,
+                    case_id=case_id,
+                    pressure=pressure,
+                ),
+                "enabled": enabled,
+                "disabled": disabled,
+                "comparison": comparison,
+            }
+        cases[case_id] = case_results
+
     result = {
-        "runner": "ai_job_compress_tool_ab",
-        "noise_blocks": args.noise_blocks,
-        "prompt_stats": prompt_stats(turns, noise_blocks=args.noise_blocks),
-        "enabled": enabled,
-        "disabled": disabled,
-        "comparison": comparison,
+        "runner": "ai_job_compress_tool_pressure_suite",
+        "case_ids": case_ids,
+        "pressures": selected_pressures,
+        "noise_blocks_override": args.noise_blocks,
+        "cases": cases,
+        "summary": _summarize_suite(cases),
     }
     (output / "result_compress_tool_ab.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if comparison["compress_tool_helped"] else 1
+    return 0 if result["summary"]["compress_tool_helped_count"] > 0 else 1
 
 
 def _run_variant(
@@ -108,10 +181,18 @@ def _run_variant(
     turns: Sequence[object],
     variant: str,
     disable_compress_tool: bool,
+    case_id: str,
+    pressure: str,
 ) -> dict[str, object]:
     variant_dir = output / variant
     variant_dir.mkdir(parents=True, exist_ok=True)
-    target = create_case_workspace(variant_dir, force=True, noise_blocks=args.noise_blocks)
+    target = create_case_workspace(
+        variant_dir,
+        force=True,
+        noise_blocks=args.noise_blocks,
+        case_id=case_id,
+        pressure=pressure,
+    )
 
     prompts = [_flatten_for_line_cli(text) for text in prompt_texts(turns)]
     stdin_text = "\n".join(prompts + ["exit"]) + "\n"
@@ -123,7 +204,10 @@ def _run_variant(
     source_root = str(Path(args.ai_job_source_root).expanduser().resolve())
     env["PYTHONPATH"] = source_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
+    if args.system_prompt:
+        env["AI_JOB_SYSTEM_PROMPT"] = args.system_prompt
 
+    started_at = time.monotonic()
     completed = _run_command_with_progress(
         cmd,
         cwd=source_root,
@@ -132,17 +216,23 @@ def _run_variant(
         timeout_seconds=args.timeout_seconds,
         progress_interval_seconds=args.progress_interval_seconds,
         show_progress=not args.no_progress,
-        label=variant,
+        label=f"{case_id}/{pressure}/{variant}",
     )
+    elapsed_seconds = round(time.monotonic() - started_at, 3)
+
     (variant_dir / "ai_job_stdout.txt").write_text(completed.stdout, encoding="utf-8")
     (variant_dir / "ai_job_stderr.txt").write_text(completed.stderr, encoding="utf-8")
     diagnostics = collect_run_diagnostics(completed.stdout, completed.stderr)
-    grade = grade_target(target)
+    diagnostics["elapsed_seconds"] = elapsed_seconds
+    grade = grade_target(target, case_id=case_id)
     variant_result = {
+        "case_id": case_id,
+        "pressure": pressure,
         "variant": variant,
         "disable_compress_tool": disable_compress_tool,
         "command": cmd,
         "exit_code": completed.returncode,
+        "elapsed_seconds": elapsed_seconds,
         "target": str(target),
         "diagnostics": diagnostics,
         "grade": asdict(grade),
@@ -172,7 +262,7 @@ def collect_run_diagnostics(stdout: str, stderr: str) -> dict[str, object]:
         "llm_request_failed_count": stderr.count("LLM 请求失败"),
         "context_length_exceeded_count": stderr.count("context_length_exceeded"),
         "python_traceback_count": stderr.count("Traceback (most recent call last):"),
-        "final_task_user_message_count": session_text.count("请完成当前 workspace 里的 auditor 报告实现"),
+        "user_message_count": len(re.findall(r"^## .* UserMessage", session_text, re.MULTILINE)),
         "tool_call_count": len(re.findall(r"^## .* ToolCall ", session_text, re.MULTILINE)),
         "read_file_tool_call_count": len(re.findall(r"^## .* ToolCall read_file", session_text, re.MULTILINE)),
         "apply_patch_tool_call_count": len(re.findall(r"^## .* ToolCall apply_patch", session_text, re.MULTILINE)),
@@ -218,15 +308,82 @@ def _compare(enabled: dict[str, object], disabled: dict[str, object]) -> dict[st
         "enabled_score": enabled_grade["score"],
         "disabled_score": disabled_grade["score"],
         "score_delta": enabled_grade["score"] - disabled_grade["score"],
-        "enabled_compress_tool_call_count": enabled_diagnostics["compress_tool_call_count"],
+        "enabled_compress_tool_call_count": enabled_diagnostics.get("compress_tool_call_count", 0),
         "enabled_compress_tool_success_count": enabled_compress_tool_success_count,
         "enabled_compress_tool_error_count": enabled_diagnostics.get("compress_tool_error_count", 0),
         "enabled_compress_tool_effective": enabled_compress_tool_effective,
-        "disabled_compress_tool_call_count": disabled_diagnostics["compress_tool_call_count"],
+        "disabled_compress_tool_call_count": disabled_diagnostics.get("compress_tool_call_count", 0),
         "enabled_read_file_tool_result_chars": enabled_diagnostics.get("read_file_tool_result_chars", 0),
         "disabled_read_file_tool_result_chars": disabled_diagnostics.get("read_file_tool_result_chars", 0),
+        "enabled_elapsed_seconds": enabled_diagnostics.get("elapsed_seconds", enabled.get("elapsed_seconds", 0)),
+        "disabled_elapsed_seconds": disabled_diagnostics.get("elapsed_seconds", disabled.get("elapsed_seconds", 0)),
         "enabled_estimated_tool_context_chars_saved": enabled_saved_chars,
     }
+
+
+def _summarize_suite(cases: dict[str, dict[str, object]]) -> dict[str, object]:
+    comparisons: list[dict[str, object]] = []
+    enabled_pass_count = 0
+    disabled_pass_count = 0
+    enabled_score_total = 0
+    disabled_score_total = 0
+    enabled_elapsed_seconds = 0.0
+    disabled_elapsed_seconds = 0.0
+    enabled_compress_tool_effective_count = 0
+    enabled_compress_tool_call_count = 0
+    enabled_estimated_tool_context_chars_saved = 0
+
+    for pressure_results in cases.values():
+        for result in pressure_results.values():
+            if not isinstance(result, dict):
+                continue
+            comparison = result["comparison"]
+            enabled = result["enabled"]
+            disabled = result["disabled"]
+            comparisons.append(comparison)
+            if enabled["grade"]["passed"]:
+                enabled_pass_count += 1
+            if disabled["grade"]["passed"]:
+                disabled_pass_count += 1
+            enabled_score_total += int(enabled["grade"]["score"])
+            disabled_score_total += int(disabled["grade"]["score"])
+            enabled_elapsed_seconds += float(enabled.get("elapsed_seconds", 0))
+            disabled_elapsed_seconds += float(disabled.get("elapsed_seconds", 0))
+            if comparison.get("enabled_compress_tool_effective"):
+                enabled_compress_tool_effective_count += 1
+            enabled_compress_tool_call_count += int(comparison.get("enabled_compress_tool_call_count", 0))
+            enabled_estimated_tool_context_chars_saved += int(
+                comparison.get("enabled_estimated_tool_context_chars_saved", 0)
+            )
+
+    cell_count = len(comparisons)
+    return {
+        "cell_count": cell_count,
+        "enabled_pass_count": enabled_pass_count,
+        "disabled_pass_count": disabled_pass_count,
+        "enabled_success_rate": _ratio(enabled_pass_count, cell_count),
+        "disabled_success_rate": _ratio(disabled_pass_count, cell_count),
+        "correctness_delta": enabled_pass_count - disabled_pass_count,
+        "enabled_score_total": enabled_score_total,
+        "disabled_score_total": disabled_score_total,
+        "score_delta_total": enabled_score_total - disabled_score_total,
+        "compress_tool_helped_count": sum(1 for item in comparisons if item.get("compress_tool_helped")),
+        "both_passed_count": sum(1 for item in comparisons if item.get("both_passed")),
+        "both_failed_count": sum(1 for item in comparisons if item.get("both_failed")),
+        "compress_tool_regressed_count": sum(1 for item in comparisons if item.get("compress_tool_regressed")),
+        "enabled_compress_tool_effective_count": enabled_compress_tool_effective_count,
+        "enabled_compress_tool_call_count": enabled_compress_tool_call_count,
+        "enabled_estimated_tool_context_chars_saved": enabled_estimated_tool_context_chars_saved,
+        "enabled_elapsed_seconds": round(enabled_elapsed_seconds, 3),
+        "disabled_elapsed_seconds": round(disabled_elapsed_seconds, 3),
+        "elapsed_seconds_delta": round(enabled_elapsed_seconds - disabled_elapsed_seconds, 3),
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    if denominator == 0:
+        return 0.0
+    return round(numerator / denominator, 4)
 
 
 def _comparison_verdict(
@@ -523,13 +680,10 @@ def _run_command_with_progress(
         elapsed_seconds=elapsed_seconds,
         stream=sys.stderr,
     )
-    if "exception" in result_box:
-        raise result_box["exception"]  # type: ignore[misc]
 
-    completed = result_box.get("completed")
-    if not isinstance(completed, subprocess.CompletedProcess):
-        raise RuntimeError("ai_job subprocess finished without a captured result")
-    return completed
+    if "exception" in result_box:
+        raise result_box["exception"]
+    return result_box["completed"]  # type: ignore[return-value]
 
 
 def _render_progress_line(*, show_progress: bool, label: str, elapsed_seconds: float, stream: TextIO) -> None:
