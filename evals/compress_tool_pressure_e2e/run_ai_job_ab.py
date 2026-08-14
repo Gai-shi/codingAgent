@@ -44,6 +44,14 @@ else:
     from .grader import grade_target
 
 
+TOOL_POLICY_NEUTRAL = "neutral"
+TOOL_POLICY_GUIDED = "guided"
+TOOL_POLICIES = (TOOL_POLICY_NEUTRAL, TOOL_POLICY_GUIDED)
+
+GUIDED_COMPRESS_TOOL_HINT = """工具使用提示：
+当前环境提供 compress_tool。读取长 evidence 或发现之前读取的是 pre-lock/误导资料后，如果你已经抽取出后续需要保留的事实，可以自主调用 compress_tool，把已读的冗长工具输出替换成短摘要，再继续完成任务；是否调用由你判断。"""
+
+
 @dataclass(frozen=True)
 class SessionSection:
     title: str
@@ -57,6 +65,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Replace output directory if it exists.")
     parser.add_argument("--case-id", choices=tuple(["all", *CASE_IDS]), default="all")
     parser.add_argument("--pressure", choices=tuple(["all", *PRESSURE_NOISE_BLOCKS]), default=DEFAULT_PRESSURE)
+    parser.add_argument(
+        "--tool-policy",
+        choices=tuple(["all", *TOOL_POLICIES]),
+        default=TOOL_POLICY_NEUTRAL,
+        help=(
+            "Prompt policy for compress_tool usage. neutral keeps enabled/disabled prompts identical; "
+            "guided adds a light compress_tool hint only to enabled runs."
+        ),
+    )
     parser.add_argument(
         "--noise-blocks",
         type=int,
@@ -99,7 +116,67 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     case_ids = list(CASE_IDS) if args.case_id == "all" else [args.case_id]
     selected_pressures = pressure_names(args.pressure)
+    selected_tool_policies = _tool_policy_names(args.tool_policy)
 
+    multi_policy = len(selected_tool_policies) > 1
+    policy_results: dict[str, dict[str, object]] = {}
+    for tool_policy in selected_tool_policies:
+        policy_output = output / tool_policy if multi_policy else output
+        policy_output.mkdir(parents=True, exist_ok=True)
+        cases = _run_policy_suite(
+            args,
+            output=policy_output,
+            case_ids=case_ids,
+            selected_pressures=selected_pressures,
+            tool_policy=tool_policy,
+        )
+        policy_results[tool_policy] = {
+            "tool_policy": tool_policy,
+            "cases": cases,
+            "summary": _summarize_suite(cases),
+        }
+
+    single_policy_result = policy_results[selected_tool_policies[0]] if len(selected_tool_policies) == 1 else None
+
+    result = {
+        "runner": "ai_job_compress_tool_pressure_suite",
+        "case_ids": case_ids,
+        "pressures": selected_pressures,
+        "tool_policy": selected_tool_policies[0] if len(selected_tool_policies) == 1 else "all",
+        "tool_policies": selected_tool_policies,
+        "noise_blocks_override": args.noise_blocks,
+        "policy_results": policy_results,
+        "cases": single_policy_result["cases"] if single_policy_result is not None else None,
+        "summary": (
+            single_policy_result["summary"]
+            if single_policy_result is not None
+            else _summarize_policy_results(policy_results)
+        ),
+    }
+    (output / "result_compress_tool_ab.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["summary"]["compress_tool_helped_count"] > 0 else 1
+
+
+def _tool_policy_names(selection: str) -> list[str]:
+    if selection == "all":
+        return list(TOOL_POLICIES)
+    if selection not in TOOL_POLICIES:
+        raise ValueError(f"unknown tool_policy: {selection}")
+    return [selection]
+
+
+def _run_policy_suite(
+    args: argparse.Namespace,
+    *,
+    output: Path,
+    case_ids: Sequence[str],
+    selected_pressures: Sequence[str],
+    tool_policy: str,
+) -> dict[str, dict[str, object]]:
     cases: dict[str, dict[str, object]] = {}
     for case_id in case_ids:
         case_results: dict[str, object] = {}
@@ -117,6 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 disable_compress_tool=False,
                 case_id=case_id,
                 pressure=pressure,
+                tool_policy=tool_policy,
             )
             disabled = _run_variant(
                 args,
@@ -126,37 +204,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 disable_compress_tool=True,
                 case_id=case_id,
                 pressure=pressure,
+                tool_policy=tool_policy,
             )
             comparison = _compare(enabled, disabled)
             case_results[pressure] = {
                 "case_id": case_id,
                 "pressure": pressure,
-                "prompt_stats": prompt_stats(
-                    turns,
-                    noise_blocks=args.noise_blocks,
-                    case_id=case_id,
-                    pressure=pressure,
-                ),
+                "tool_policy": tool_policy,
+                "prompt_stats": {
+                    **prompt_stats(
+                        turns,
+                        noise_blocks=args.noise_blocks,
+                        case_id=case_id,
+                        pressure=pressure,
+                    ),
+                    "enabled_prompt_chars": enabled["prompt_chars"],
+                    "disabled_prompt_chars": disabled["prompt_chars"],
+                },
                 "enabled": enabled,
                 "disabled": disabled,
                 "comparison": comparison,
             }
         cases[case_id] = case_results
-
-    result = {
-        "runner": "ai_job_compress_tool_pressure_suite",
-        "case_ids": case_ids,
-        "pressures": selected_pressures,
-        "noise_blocks_override": args.noise_blocks,
-        "cases": cases,
-        "summary": _summarize_suite(cases),
-    }
-    (output / "result_compress_tool_ab.json").write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["summary"]["compress_tool_helped_count"] > 0 else 1
+    return cases
 
 
 def _run_variant(
@@ -168,6 +238,7 @@ def _run_variant(
     disable_compress_tool: bool,
     case_id: str,
     pressure: str,
+    tool_policy: str,
 ) -> dict[str, object]:
     variant_dir = output / variant
     variant_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +250,16 @@ def _run_variant(
         pressure=pressure,
     )
 
-    prompts = [_flatten_for_line_cli(text) for text in prompt_texts(turns)]
+    effective_prompts = _effective_prompt_texts(
+        turns,
+        tool_policy=tool_policy,
+        disable_compress_tool=disable_compress_tool,
+    )
+    (variant_dir / "stdin_prompts.txt").write_text(
+        "\n\n--- prompt turn ---\n\n".join(effective_prompts) + "\n",
+        encoding="utf-8",
+    )
+    prompts = [_flatten_for_line_cli(text) for text in effective_prompts]
     stdin_text = "\n".join(prompts + ["exit"]) + "\n"
     cmd = shlex.split(args.ai_job_command) + ["--workspace", str(target)]
     if disable_compress_tool:
@@ -199,7 +279,7 @@ def _run_variant(
         timeout_seconds=args.timeout_seconds,
         progress_interval_seconds=args.progress_interval_seconds,
         show_progress=not args.no_progress,
-        label=f"{case_id}/{pressure}/{variant}",
+        label=f"{tool_policy}/{case_id}/{pressure}/{variant}",
     )
     elapsed_seconds = round(time.monotonic() - started_at, 3)
 
@@ -211,8 +291,14 @@ def _run_variant(
     variant_result = {
         "case_id": case_id,
         "pressure": pressure,
+        "tool_policy": tool_policy,
         "variant": variant,
         "disable_compress_tool": disable_compress_tool,
+        "guidance_injected": _should_inject_guided_hint(
+            tool_policy=tool_policy,
+            disable_compress_tool=disable_compress_tool,
+        ),
+        "prompt_chars": sum(len(text) for text in effective_prompts),
         "command": cmd,
         "exit_code": completed.returncode,
         "elapsed_seconds": elapsed_seconds,
@@ -225,6 +311,22 @@ def _run_variant(
         encoding="utf-8",
     )
     return variant_result
+
+
+def _effective_prompt_texts(
+    turns: Sequence[object],
+    *,
+    tool_policy: str,
+    disable_compress_tool: bool,
+) -> list[str]:
+    texts = prompt_texts(turns)
+    if not _should_inject_guided_hint(tool_policy=tool_policy, disable_compress_tool=disable_compress_tool):
+        return texts
+    return [f"{GUIDED_COMPRESS_TOOL_HINT}\n\n{text}" for text in texts]
+
+
+def _should_inject_guided_hint(*, tool_policy: str, disable_compress_tool: bool) -> bool:
+    return tool_policy == TOOL_POLICY_GUIDED and not disable_compress_tool
 
 
 def collect_run_diagnostics(stdout: str, stderr: str) -> dict[str, object]:
@@ -361,6 +463,88 @@ def _summarize_suite(cases: dict[str, dict[str, object]]) -> dict[str, object]:
         "disabled_elapsed_seconds": round(disabled_elapsed_seconds, 3),
         "elapsed_seconds_delta": round(enabled_elapsed_seconds - disabled_elapsed_seconds, 3),
     }
+
+
+def _summarize_policy_results(policy_results: dict[str, dict[str, object]]) -> dict[str, object]:
+    policy_summaries = {
+        policy: result["summary"]
+        for policy, result in policy_results.items()
+        if isinstance(result.get("summary"), dict)
+    }
+    cell_count = sum(int(summary.get("cell_count", 0)) for summary in policy_summaries.values())
+    enabled_pass_count = sum(
+        int(summary.get("enabled_pass_count", 0)) for summary in policy_summaries.values()
+    )
+    disabled_pass_count = sum(
+        int(summary.get("disabled_pass_count", 0)) for summary in policy_summaries.values()
+    )
+    enabled_score_total = sum(
+        int(summary.get("enabled_score_total", 0)) for summary in policy_summaries.values()
+    )
+    disabled_score_total = sum(
+        int(summary.get("disabled_score_total", 0)) for summary in policy_summaries.values()
+    )
+    enabled_elapsed_seconds = sum(
+        float(summary.get("enabled_elapsed_seconds", 0)) for summary in policy_summaries.values()
+    )
+    disabled_elapsed_seconds = sum(
+        float(summary.get("disabled_elapsed_seconds", 0)) for summary in policy_summaries.values()
+    )
+    return {
+        "policy_count": len(policy_summaries),
+        "cell_count": cell_count,
+        "enabled_pass_count": enabled_pass_count,
+        "disabled_pass_count": disabled_pass_count,
+        "enabled_success_rate": _ratio(enabled_pass_count, cell_count),
+        "disabled_success_rate": _ratio(disabled_pass_count, cell_count),
+        "correctness_delta": enabled_pass_count - disabled_pass_count,
+        "enabled_score_total": enabled_score_total,
+        "disabled_score_total": disabled_score_total,
+        "score_delta_total": enabled_score_total - disabled_score_total,
+        "compress_tool_helped_count": sum(
+            int(summary.get("compress_tool_helped_count", 0)) for summary in policy_summaries.values()
+        ),
+        "both_passed_count": sum(
+            int(summary.get("both_passed_count", 0)) for summary in policy_summaries.values()
+        ),
+        "both_failed_count": sum(
+            int(summary.get("both_failed_count", 0)) for summary in policy_summaries.values()
+        ),
+        "compress_tool_regressed_count": sum(
+            int(summary.get("compress_tool_regressed_count", 0)) for summary in policy_summaries.values()
+        ),
+        "enabled_compress_tool_effective_count": sum(
+            int(summary.get("enabled_compress_tool_effective_count", 0))
+            for summary in policy_summaries.values()
+        ),
+        "enabled_compress_tool_call_count": sum(
+            int(summary.get("enabled_compress_tool_call_count", 0))
+            for summary in policy_summaries.values()
+        ),
+        "enabled_estimated_tool_context_chars_saved": sum(
+            int(summary.get("enabled_estimated_tool_context_chars_saved", 0))
+            for summary in policy_summaries.values()
+        ),
+        "enabled_elapsed_seconds": round(enabled_elapsed_seconds, 3),
+        "disabled_elapsed_seconds": round(disabled_elapsed_seconds, 3),
+        "elapsed_seconds_delta": round(enabled_elapsed_seconds - disabled_elapsed_seconds, 3),
+        "pure_availability_delta": _policy_correctness_delta(
+            policy_summaries,
+            TOOL_POLICY_NEUTRAL,
+        ),
+        "guided_tool_delta": _policy_correctness_delta(
+            policy_summaries,
+            TOOL_POLICY_GUIDED,
+        ),
+        "policy_summaries": policy_summaries,
+    }
+
+
+def _policy_correctness_delta(policy_summaries: dict[str, dict[str, object]], policy: str) -> int | None:
+    summary = policy_summaries.get(policy)
+    if summary is None:
+        return None
+    return int(summary.get("correctness_delta", 0))
 
 
 def _ratio(numerator: int, denominator: int) -> float:

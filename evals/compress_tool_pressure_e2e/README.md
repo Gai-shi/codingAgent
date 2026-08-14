@@ -6,13 +6,13 @@
 
 这个目录现在是一个小型自然任务套件，而不是单个提示词压力测试。核心目标是测试：
 
-1. 用户 prompt 不点名 `compress_tool`，让模型自行决定是否使用可用工具。
-2. enabled / disabled 使用完全相同的用户 prompt。
-3. enabled 只多暴露 `compress_tool`；disabled 通过 `--disable-compress-tool` 隐藏该工具。
+1. `neutral` 策略下，用户 prompt 不点名 `compress_tool`，让模型自行决定是否使用可用工具。
+2. `guided` 策略下，只在 enabled 组加入轻量工具使用提示，disabled 组不注入无法使用的工具提示。
+3. enabled 暴露 `compress_tool`；disabled 通过 `--disable-compress-tool` 隐藏该工具。
 4. 主要指标是正确率提升：enabled 通过、disabled 失败、且 enabled 有有效压缩。
 5. 辅助指标是工具调用、上下文节省、耗时和分数差异。
 
-runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文压缩掩盖 `compress_tool` 的影响。runner 不注入额外 system prompt；enabled / disabled 的行为差异只来自 `compress_tool` 是否可用。
+runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文压缩掩盖 `compress_tool` 的影响。默认 `--tool-policy neutral` 保持 enabled / disabled 的 prompt 完全一致；`--tool-policy guided` 用来测试“工具可用 + 合理策略提示”后的收益。
 
 ## Case
 
@@ -36,6 +36,16 @@ all     依次运行 smoke、medium、hard
 
 旧参数 `--noise-blocks` 保留为兼容入口。传入后会覆盖当前 pressure 的默认噪声规模，主要用于临时调参。当前默认规模是 `smoke=12`、`medium=260`、`hard=760`。
 
+## 工具策略
+
+使用 `--tool-policy` 选择工具提示策略：
+
+```text
+neutral  默认值。enabled / disabled 使用完全相同的自然任务 prompt，用于测纯工具可用性。
+guided   只给 enabled 组加入轻量 compress_tool 使用提示，用于测工具产品化引导后的收益。
+all      依次运行 neutral 和 guided，并在 summary 中同时给出 pure_availability_delta 与 guided_tool_delta。
+```
+
 ## 运行
 
 从仓库根目录运行 hard 档：
@@ -45,6 +55,26 @@ python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
   --output /tmp/ai_job_compress_tool_pressure \
   --force \
   --pressure hard
+```
+
+运行带工具策略提示的 hard 档：
+
+```bash
+python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
+  --output /tmp/ai_job_compress_tool_pressure_guided \
+  --force \
+  --pressure hard \
+  --tool-policy guided
+```
+
+同时跑自然选择和带引导两组：
+
+```bash
+python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
+  --output /tmp/ai_job_compress_tool_pressure_policy_ab \
+  --force \
+  --pressure hard \
+  --tool-policy all
 ```
 
 运行完整三档：
@@ -84,10 +114,19 @@ python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
 
 ```text
 result_compress_tool_ab.json
+policy_results.<policy>.summary
+policy_results.<policy>.cases
 <case_id>/<pressure>/enabled/result_enabled.json
 <case_id>/<pressure>/disabled/result_disabled.json
 <case_id>/<pressure>/enabled/target_repo/
 <case_id>/<pressure>/disabled/target_repo/
+```
+
+当 `--tool-policy all` 时，每个策略会写入独立子目录：
+
+```text
+neutral/<case_id>/<pressure>/enabled/result_enabled.json
+guided/<case_id>/<pressure>/enabled/result_enabled.json
 ```
 
 核心字段：
@@ -95,6 +134,8 @@ result_compress_tool_ab.json
 - `summary.enabled_success_rate`: enabled 在所有 cell 中的通过率。
 - `summary.disabled_success_rate`: disabled 在所有 cell 中的通过率。
 - `summary.correctness_delta`: enabled 通过数减 disabled 通过数。
+- `summary.pure_availability_delta`: `neutral` 策略下的正确率差异；只在 `--tool-policy all` 汇总中出现。
+- `summary.guided_tool_delta`: `guided` 策略下的正确率差异；只在 `--tool-policy all` 汇总中出现。
 - `summary.compress_tool_helped_count`: enabled 通过、disabled 失败、且 enabled 有有效压缩的 cell 数量。
 - `summary.enabled_compress_tool_effective_count`: enabled 成功压缩并产生上下文节省的 cell 数量。
 - `summary.enabled_estimated_tool_context_chars_saved`: 粗略估算的工具输出字符节省量。

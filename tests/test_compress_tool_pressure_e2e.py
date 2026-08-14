@@ -14,7 +14,12 @@ from evals.compress_tool_pressure_e2e.benchmark_case import (
 )
 from evals.compress_tool_pressure_e2e.grader import grade_target
 from evals.compress_tool_pressure_e2e.run_ai_job_ab import (
+    GUIDED_COMPRESS_TOOL_HINT,
+    TOOL_POLICY_GUIDED,
+    TOOL_POLICY_NEUTRAL,
     _compare,
+    _effective_prompt_texts,
+    _summarize_policy_results,
     _summarize_suite,
     collect_run_diagnostics,
 )
@@ -93,6 +98,31 @@ class CompressToolPressureE2ETest(unittest.TestCase):
             self.assertNotIn("compress_tool", joined)
             self.assertNotIn("压缩", joined)
             self.assertIn("evidence/00_index.txt", joined)
+
+    def test_guided_policy_injects_tool_hint_only_for_enabled_variant(self):
+        turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="hard")
+
+        neutral_enabled = _effective_prompt_texts(
+            turns,
+            tool_policy=TOOL_POLICY_NEUTRAL,
+            disable_compress_tool=False,
+        )
+        guided_disabled = _effective_prompt_texts(
+            turns,
+            tool_policy=TOOL_POLICY_GUIDED,
+            disable_compress_tool=True,
+        )
+        guided_enabled = _effective_prompt_texts(
+            turns,
+            tool_policy=TOOL_POLICY_GUIDED,
+            disable_compress_tool=False,
+        )
+
+        self.assertNotIn("compress_tool", "\n".join(neutral_enabled))
+        self.assertNotIn("compress_tool", "\n".join(guided_disabled))
+        self.assertIn(GUIDED_COMPRESS_TOOL_HINT, guided_enabled[0])
+        self.assertIn("compress_tool", "\n".join(guided_enabled))
+        self.assertEqual(len(guided_enabled), len(turns))
 
     def test_conflict_grader_accepts_exact_hidden_contract_and_rejects_unimplemented_fixture(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -559,6 +589,60 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertEqual(summary["compress_tool_helped_count"], 1)
         self.assertEqual(summary["enabled_compress_tool_effective_count"], 1)
         self.assertEqual(summary["enabled_estimated_tool_context_chars_saved"], 1000)
+
+    def test_summarize_policy_results_keeps_neutral_and_guided_deltas_separate(self):
+        policy_results = {
+            TOOL_POLICY_NEUTRAL: {
+                "summary": {
+                    "cell_count": 2,
+                    "enabled_pass_count": 1,
+                    "disabled_pass_count": 1,
+                    "correctness_delta": 0,
+                    "enabled_score_total": 140,
+                    "disabled_score_total": 140,
+                    "score_delta_total": 0,
+                    "compress_tool_helped_count": 0,
+                    "both_passed_count": 1,
+                    "both_failed_count": 1,
+                    "compress_tool_regressed_count": 0,
+                    "enabled_compress_tool_effective_count": 0,
+                    "enabled_compress_tool_call_count": 0,
+                    "enabled_estimated_tool_context_chars_saved": 0,
+                    "enabled_elapsed_seconds": 10,
+                    "disabled_elapsed_seconds": 9,
+                }
+            },
+            TOOL_POLICY_GUIDED: {
+                "summary": {
+                    "cell_count": 2,
+                    "enabled_pass_count": 2,
+                    "disabled_pass_count": 1,
+                    "correctness_delta": 1,
+                    "enabled_score_total": 190,
+                    "disabled_score_total": 140,
+                    "score_delta_total": 50,
+                    "compress_tool_helped_count": 1,
+                    "both_passed_count": 1,
+                    "both_failed_count": 0,
+                    "compress_tool_regressed_count": 0,
+                    "enabled_compress_tool_effective_count": 1,
+                    "enabled_compress_tool_call_count": 2,
+                    "enabled_estimated_tool_context_chars_saved": 1000,
+                    "enabled_elapsed_seconds": 12,
+                    "disabled_elapsed_seconds": 9,
+                }
+            },
+        }
+
+        summary = _summarize_policy_results(policy_results)
+
+        self.assertEqual(summary["policy_count"], 2)
+        self.assertEqual(summary["cell_count"], 4)
+        self.assertEqual(summary["correctness_delta"], 1)
+        self.assertEqual(summary["compress_tool_helped_count"], 1)
+        self.assertEqual(summary["pure_availability_delta"], 0)
+        self.assertEqual(summary["guided_tool_delta"], 1)
+        self.assertEqual(summary["enabled_compress_tool_call_count"], 2)
 
 
 if __name__ == "__main__":
