@@ -18,8 +18,8 @@ runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文�
 
 当前套件有两个 case：
 
-- `conflict_contract_delay`：先读取长证据材料，材料里有多版冲突契约。下一轮禁止重新读取 evidence，要求实现 `auditor.report.build_report()`。隐藏 grader 检查最终契约、region、tag、gate、owner chain、blocking condition 和 release flag 的组合是否来自有效 release/hotfix 记录。
-- `trace_debug_delay`：先读取长生产 trace 和状态机材料。下一轮禁止重新读取 evidence，要求修复 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查 manual review、quarantine、audit defer 等多个有效生产规则。
+- `conflict_contract_delay`：先从 `evidence/00_index.txt` 定位依据。索引会引导 agent 先读很长的 legacy/draft 档案，再用较短的 `final_contract_delta.txt` 纠偏。下一轮禁止重新读取 evidence，要求实现 `auditor.report.build_report()`。隐藏 grader 检查最终契约、region、tag、gate、owner chain、blocking condition 和 release flag 的组合是否来自有效 release/hotfix 记录。
+- `trace_debug_delay`：先从 `evidence/00_index.txt` 定位依据。索引会引导 agent 先读很长的 incident archive 和规则档案，再用较短的 `active_trace_manifest.txt` 纠偏。下一轮禁止重新读取 evidence，要求修复 `reconciler.decision.build_reconciliation_plan()`。隐藏 grader 检查 manual review、quarantine、audit defer 等多个有效生产规则。
 
 两个 case 都采用延迟记忆结构：长工具输出出现在第一轮，最终实现发生在第二轮。
 

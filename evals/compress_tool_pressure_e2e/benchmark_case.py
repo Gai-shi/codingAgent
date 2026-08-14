@@ -145,10 +145,18 @@ def prompt_stats(
 
 def evidence_chars(*, case_id: str = CASE_ID, noise_blocks: int = DEFAULT_NOISE_BLOCKS) -> int:
     if case_id == CASE_CONFLICT_CONTRACT_DELAY:
-        return len(noisy_evidence_text(noise_blocks=noise_blocks))
+        return (
+            len(_conflict_evidence_index())
+            + len(_conflict_contract_decisions(noise_blocks=noise_blocks))
+            + len(_conflict_release_overrides(noise_blocks=noise_blocks))
+            + len(_conflict_final_delta())
+        )
     if case_id == CASE_TRACE_DEBUG_DELAY:
-        return len(_trace_production_log(noise_blocks=noise_blocks)) + len(
-            _trace_state_machine_notes(noise_blocks=noise_blocks)
+        return (
+            len(_trace_evidence_index())
+            + len(_trace_production_log(noise_blocks=noise_blocks))
+            + len(_trace_state_machine_notes(noise_blocks=noise_blocks))
+            + len(_trace_active_manifest())
         )
     raise ValueError(f"unknown case_id: {case_id}")
 
@@ -169,6 +177,7 @@ def _create_conflict_contract_workspace(target: Path, config: PressureConfig) ->
     _write(target / "auditor" / "__init__.py", '"""Audit fixture package."""\n')
     _write(target / "auditor" / "report.py", _conflict_report_py())
     _write(target / "tests" / "test_report.py", _conflict_test_report_py())
+    _write(target / "evidence" / "00_index.txt", _conflict_evidence_index())
     _write(
         target / "evidence" / "contract_decisions.txt",
         _conflict_contract_decisions(noise_blocks=config.noise_blocks),
@@ -177,6 +186,15 @@ def _create_conflict_contract_workspace(target: Path, config: PressureConfig) ->
         target / "evidence" / "release_overrides.txt",
         _conflict_release_overrides(noise_blocks=config.noise_blocks),
     )
+    _write(
+        target / "evidence" / "legacy_contract_archive.txt",
+        _conflict_contract_decisions(noise_blocks=config.noise_blocks),
+    )
+    _write(
+        target / "evidence" / "draft_release_notes.txt",
+        _conflict_release_overrides(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "final_contract_delta.txt", _conflict_final_delta())
     _write(target / "README.md", _conflict_readme_md())
 
 
@@ -188,6 +206,7 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
     _write(target / "reconciler" / "__init__.py", '"""Trace reconciliation fixture package."""\n')
     _write(target / "reconciler" / "decision.py", _trace_decision_py())
     _write(target / "tests" / "test_decision.py", _trace_test_decision_py())
+    _write(target / "evidence" / "00_index.txt", _trace_evidence_index())
     _write(
         target / "evidence" / "production_trace.log",
         _trace_production_log(noise_blocks=config.noise_blocks),
@@ -196,6 +215,11 @@ def _create_trace_debug_workspace(target: Path, config: PressureConfig) -> None:
         target / "evidence" / "state_machine_notes.txt",
         _trace_state_machine_notes(noise_blocks=config.noise_blocks),
     )
+    _write(
+        target / "evidence" / "incident_trace_archive.log",
+        _trace_production_log(noise_blocks=config.noise_blocks),
+    )
+    _write(target / "evidence" / "active_trace_manifest.txt", _trace_active_manifest())
     _write(target / "README.md", _trace_readme_md())
 
 
@@ -205,8 +229,8 @@ def _conflict_contract_prompt_turns() -> list[PromptTurn]:
             kind="evidence_research",
             text="""请先做证据调研。
 
-必须读取 evidence/contract_decisions.txt 和 evidence/release_overrides.txt。
-这两份材料很长，包含互相冲突的历史方案、候选方案和回滚记录。
+请从 evidence/00_index.txt 开始，根据索引自行定位实现依据。
+材料里包含很长的历史档案、草稿说明和较短的最终 delta；不要凭文件名直接猜最终来源。
 本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
@@ -229,8 +253,8 @@ def _trace_debug_prompt_turns() -> list[PromptTurn]:
             kind="trace_research",
             text="""请先做生产 trace 调研。
 
-必须读取 evidence/production_trace.log 和 evidence/state_machine_notes.txt。
-这两份材料很长，包含大量相似 incident、过期状态机规则和少量仍然有效的处理规则。
+请从 evidence/00_index.txt 开始，根据索引自行定位 active trace 依据。
+材料里包含很长的 incident archive、过期状态机规则和较短的 active manifest；不要凭文件名直接猜最终来源。
 本轮不要修改文件，不要运行测试；读完只回复“调研完成”，不要粘贴证据内容。""",
         ),
         PromptTurn(
@@ -264,6 +288,43 @@ Interpretation rule:
             blocks.append(_conflict_core_contract_block("middle"))
     blocks.append(_conflict_core_contract_block("late"))
     return "\n\n".join(blocks) + "\n"
+
+
+def _conflict_evidence_index() -> str:
+    return """# Evidence Index
+
+Start with the large archive when recovering the baseline contract:
+- legacy_contract_archive.txt: long baseline archive with final core fields mixed with obsolete candidates.
+- draft_release_notes.txt: long release note ledger; many rows were withdrawn or rolled back.
+- final_contract_delta.txt: short delta that identifies which archive facts remain active and which release-note overrides win.
+
+Do not implement directly from the archive alone. The final implementation is baseline archive facts plus active delta overrides.
+
+Compatibility aliases from older eval revisions:
+- contract_decisions.txt mirrors legacy_contract_archive.txt.
+- release_overrides.txt mirrors draft_release_notes.txt.
+"""
+
+
+def _conflict_final_delta() -> str:
+    return """# Final Contract Delta
+
+This short file is authoritative for conflict_contract_delay after the baseline archive has been read.
+
+Use these active source records:
+- FINAL_CONTRACT_CORE records from legacy_contract_archive.txt provide title, marker, policy code, risk level, escalation channel, regions, audit tags, and validation gates.
+- HOTFIX_CONTRACT_OVERRIDE records from draft_release_notes.txt provide owner, status, summary prefix, review window, owner chain, blocking conditions, and release flags.
+
+Withdrawn sources:
+- contract-candidate records are not active.
+- release-override-shadow records are not active.
+- Any DRAFT_STATUS, LEGACY_POLICY, wrong-owner, shadow-summary, obsolete blocker, or allow_legacy_policy=yes value is invalid.
+
+Final composition requirement:
+- summary must start with "compress-tool-preserved" and mention "KEEP-COMPRESS-TOOL-9173".
+- regions must be {"primary": "iad-7", "secondary": "pdx-2"}.
+- audit_tags, validation_gates, owner_chain, blocking_conditions, and release_flags must preserve the active record ordering.
+"""
 
 
 def _conflict_release_overrides(*, noise_blocks: int) -> str:
@@ -467,6 +528,42 @@ Interpretation rule:
     blocks.append(_trace_secondary_incident_block("late"))
     blocks.append(_trace_audit_incident_block("late"))
     return "\n\n".join(blocks) + "\n"
+
+
+def _trace_evidence_index() -> str:
+    return """# Trace Evidence Index
+
+Start with the archive when recovering production trace context:
+- incident_trace_archive.log: long incident archive with confirmed traces mixed with replay and sandbox traces.
+- state_machine_notes.txt: long rule ledger with active rules mixed with rollback candidates.
+- active_trace_manifest.txt: short manifest that identifies which trace ids and state rules are active for this release.
+
+Do not implement directly from the archive alone. The final implementation is active manifest ids plus active state rules.
+
+Compatibility alias from older eval revisions:
+- production_trace.log mirrors incident_trace_archive.log.
+"""
+
+
+def _trace_active_manifest() -> str:
+    return """# Active Trace Manifest
+
+This short file is authoritative for trace_debug_delay after the archive and state machine notes have been read.
+
+Active production traces for release-2026.08:
+- TRACE-KEEP-4821 uses ACTIVE_STATE_RULE.
+- TRACE-QUARANTINE-7712 uses ACTIVE_QUARANTINE_RULE.
+- TRACE-AUDIT-3345 uses ACTIVE_AUDIT_RULE.
+
+Retired sources:
+- trace-replay records are not active.
+- candidate-state-rule records are not active.
+- retry-later, quarantine-shadow, defer-legacy-audit, legacy-retry, wrong-owner, and TRACE-OBSOLETE values are invalid.
+
+Final composition requirement:
+- Preserve the incoming trace_id as marker for each matching active event.
+- Non-matching events should keep a non-active default action and preserve the incoming trace_id as marker.
+"""
 
 
 def _trace_state_machine_notes(*, noise_blocks: int) -> str:
