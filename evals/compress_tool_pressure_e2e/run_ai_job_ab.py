@@ -121,10 +121,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--auto-compression-context-window",
         type=int,
-        default=10_000_000,
+        default=None,
         help=(
-            "Temporary AI_JOB_CONTEXT_WINDOW used during this eval so automatic "
-            "context compression does not mask compress_tool behavior."
+            "Optional temporary AI_JOB_CONTEXT_WINDOW override. Omit it to allow "
+            "ai_job's normal automatic context compression behavior."
         ),
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=5.0)
@@ -406,7 +406,8 @@ def _run_variant(
     trace_log_base_path = variant_dir / "ai_job_run" / "logs" / "log.log"
     session_record_base_path = variant_dir / "ai_job_run" / "sessions" / "sessions.md"
     env["PYTHONPATH"] = source_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
+    if args.auto_compression_context_window is not None:
+        env["AI_JOB_CONTEXT_WINDOW"] = str(args.auto_compression_context_window)
     env[AI_JOB_TRACE_LOG_PATH_ENV] = str(trace_log_base_path)
     env[AI_JOB_SESSION_RECORD_PATH_ENV] = str(session_record_base_path)
 
@@ -446,6 +447,7 @@ def _run_variant(
         "exit_code": completed.returncode,
         "elapsed_seconds": elapsed_seconds,
         "target": str(target),
+        "auto_compression_context_window": args.auto_compression_context_window,
         "trace_log_base_path": str(trace_log_base_path),
         "session_record_base_path": str(session_record_base_path),
         "diagnostics": diagnostics,

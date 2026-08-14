@@ -12,7 +12,7 @@
 4. 主要指标是正确率提升：enabled 通过、disabled 失败、且 enabled 有有效压缩。
 5. 辅助指标是工具调用、上下文节省、耗时和分数差异。
 
-runner 会临时设置较大的 `AI_JOB_CONTEXT_WINDOW`，避免自动上下文压缩掩盖 `compress_tool` 的影响。默认 `--tool-policy neutral` 保持 enabled / disabled 的 prompt 完全一致；`--tool-policy guided` 用来测试“工具可用 + 合理策略提示”后的收益。
+runner 默认不覆盖 `AI_JOB_CONTEXT_WINDOW`，让 ai_job 使用正常自动上下文压缩行为。默认 `--tool-policy neutral` 保持 enabled / disabled 的 prompt 完全一致；`--tool-policy guided` 用来测试“工具可用 + 合理策略提示”后的收益。如果需要复现“自动压缩不兜底，只看 compress_tool 主动压缩”的压力口径，可以显式传 `--auto-compression-context-window 10000000`。
 
 ## Case
 
@@ -69,6 +69,17 @@ python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
   --force \
   --pressure hard \
   --tool-policy guided
+```
+
+运行同一策略但显式绕开自动上下文压缩兜底：
+
+```bash
+python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
+  --output /tmp/ai_job_compress_tool_pressure_guided_no_auto \
+  --force \
+  --pressure hard \
+  --tool-policy guided \
+  --auto-compression-context-window 10000000
 ```
 
 同时跑自然选择和带引导两组：

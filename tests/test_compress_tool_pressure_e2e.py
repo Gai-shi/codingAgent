@@ -885,7 +885,70 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
         self.assertIn("enabled_success_rate=1.0", text)
         self.assertNotIn("policy_results", text)
 
-    def test_run_variant_isolates_ai_job_session_and_log_paths_per_variant(self):
+    def test_run_variant_isolates_ai_job_session_and_log_paths_per_variant_without_context_override(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = Path(tmp_dir) / "cell"
+            turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="smoke")
+            task = VariantTask(
+                output=output,
+                turns=turns,
+                variant="enabled",
+                disable_compress_tool=False,
+                case_id=CASE_CONFLICT_CONTRACT_DELAY,
+                pressure="smoke",
+                tool_policy=TOOL_POLICY_NEUTRAL,
+            )
+            args = SimpleNamespace(
+                noise_blocks=1,
+                ai_job_command="python3 -m ai_job",
+                ai_job_source_root=Path(tmp_dir) / "source",
+                auto_compression_context_window=None,
+                timeout_seconds=30,
+                progress_interval_seconds=5,
+                no_progress=True,
+            )
+            captured_env: dict[str, str] = {}
+
+            def fake_run_command(cmd, *, env, **_kwargs):
+                captured_env.update(env)
+                session_base = Path(env[AI_JOB_SESSION_RECORD_PATH_ENV])
+                log_base = Path(env[AI_JOB_TRACE_LOG_PATH_ENV])
+                session_path = session_base.with_name("sessions-20260814-171609-681.md")
+                log_path = log_base.with_name("log-20260814-171609-681.log")
+                session_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                session_path.write_text("# Session\n", encoding="utf-8")
+                log_path.write_text("", encoding="utf-8")
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"log_file: {log_path}\nsession_record: {session_path}\n",
+                    stderr="",
+                )
+
+            with mock.patch(
+                "evals.compress_tool_pressure_e2e.run_ai_job_ab._run_command_with_progress",
+                side_effect=fake_run_command,
+            ):
+                with mock.patch(
+                    "evals.compress_tool_pressure_e2e.run_ai_job_ab.grade_target",
+                    return_value=GradeResult(passed=False, score=0),
+                ):
+                    result = _run_variant(args, task, io.StringIO())
+
+        variant_dir = output / "enabled"
+        expected_session_base = variant_dir / "ai_job_run" / "sessions" / "sessions.md"
+        expected_log_base = variant_dir / "ai_job_run" / "logs" / "log.log"
+        self.assertEqual(captured_env[AI_JOB_SESSION_RECORD_PATH_ENV], str(expected_session_base))
+        self.assertEqual(captured_env[AI_JOB_TRACE_LOG_PATH_ENV], str(expected_log_base))
+        self.assertNotIn("AI_JOB_CONTEXT_WINDOW", captured_env)
+        self.assertIsNone(result["auto_compression_context_window"])
+        self.assertEqual(result["session_record_base_path"], str(expected_session_base))
+        self.assertEqual(result["trace_log_base_path"], str(expected_log_base))
+        self.assertTrue(str(result["diagnostics"]["session_record"]).startswith(str(expected_session_base.parent)))
+        self.assertTrue(str(result["diagnostics"]["log_file"]).startswith(str(expected_log_base.parent)))
+
+    def test_run_variant_can_override_auto_compression_context_window(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output = Path(tmp_dir) / "cell"
             turns = build_prompt_turns(case_id=CASE_CONFLICT_CONTRACT_DELAY, pressure="smoke")
@@ -936,15 +999,8 @@ Error: no previous tool result matches read_file with arguments {"path":"missing
                 ):
                     result = _run_variant(args, task, io.StringIO())
 
-        variant_dir = output / "enabled"
-        expected_session_base = variant_dir / "ai_job_run" / "sessions" / "sessions.md"
-        expected_log_base = variant_dir / "ai_job_run" / "logs" / "log.log"
-        self.assertEqual(captured_env[AI_JOB_SESSION_RECORD_PATH_ENV], str(expected_session_base))
-        self.assertEqual(captured_env[AI_JOB_TRACE_LOG_PATH_ENV], str(expected_log_base))
-        self.assertEqual(result["session_record_base_path"], str(expected_session_base))
-        self.assertEqual(result["trace_log_base_path"], str(expected_log_base))
-        self.assertTrue(str(result["diagnostics"]["session_record"]).startswith(str(expected_session_base.parent)))
-        self.assertTrue(str(result["diagnostics"]["log_file"]).startswith(str(expected_log_base.parent)))
+        self.assertEqual(captured_env["AI_JOB_CONTEXT_WINDOW"], "123456")
+        self.assertEqual(result["auto_compression_context_window"], 123456)
 
     def test_run_variant_tasks_uses_thread_pool_workers(self):
         barrier = threading.Barrier(2)
