@@ -120,6 +120,15 @@ def build_report() -> dict[str, object]:
         "review_window": "2026-W33",
         "escalation_channel": "audit-war-room",
         "regions": {"primary": "iad-7", "secondary": "pdx-2"},
+        "control_plane": "cp-orion-7",
+        "contract_version": "ccdl-2026.08.17",
+        "dataset_fingerprint": "fp-9ab4c2-771",
+        "routing_keys": ["audit.q4.retention", "policy.compress.42", "marker.keep.9173"],
+        "evidence_checksums": {
+            "core": "sha256:ccdl-core-9173",
+            "override": "sha256:hotfix-42-w33",
+            "delta": "sha256:delta-final-771",
+        },
         "audit_tags": ["contract-lock", "manual-review", "q4-retention"],
         "validation_gates": [
             "schema-freeze",
@@ -128,6 +137,24 @@ def build_report() -> dict[str, object]:
             "summary-prefix",
         ],
         "owner_chain": ["context-quality", "audit-platform", "release-ops"],
+        "approval_chain": ["rfc-4172", "sec-1180", "ops-9301"],
+        "runbook_steps": [
+            "freeze-schema",
+            "notify-context-quality",
+            "verify-marker-retention",
+            "publish-war-room-note",
+        ],
+        "watchlist": [
+            "legacy-policy-loader",
+            "summary-shadow-renderer",
+            "owner-ack-cron",
+        ],
+        "notification_channels": ["#audit-war-room", "#context-quality"],
+        "deadline_matrix": {
+            "owner_ack": "2026-08-14T09:00Z",
+            "schema_freeze": "2026-08-15T12:00Z",
+            "release_gate": "2026-08-16T18:00Z",
+        },
         "blocking_conditions": [
             "missing-owner-ack",
             "marker-mismatch",
@@ -184,6 +211,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "retry_after_minutes": "0",
             "status": "blocked-on-ledger-review",
             "marker": event.get("trace_id", "TRACE-KEEP-4821"),
+            "queue": "ledger-manual-review",
+            "runbook": "rb-ledger-9173",
+            "escalation_channel": "#ledger-quality",
+            "sla": "PT0M",
+            "evidence_hash": "sha256:trace-keep-4821",
+            "decision_flags": ["manual-review", "retain-marker", "block-ledger"],
         }
     if (
         event.get("tenant") == "aurora-ledger"
@@ -198,6 +231,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "retry_after_minutes": "0",
             "status": "blocked-on-integrity-check",
             "marker": event.get("trace_id", "TRACE-QUARANTINE-7712"),
+            "queue": "ledger-quarantine",
+            "runbook": "rb-ledger-7712",
+            "escalation_channel": "#ledger-integrity",
+            "sla": "PT0M",
+            "evidence_hash": "sha256:trace-quarantine-7712",
+            "decision_flags": ["quarantine", "checksum", "block-ledger"],
         }
     if (
         event.get("tenant") == "aurora-ledger"
@@ -212,6 +251,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
             "retry_after_minutes": "30",
             "status": "deferred-for-audit-window",
             "marker": event.get("trace_id", "TRACE-AUDIT-3345"),
+            "queue": "audit-defer",
+            "runbook": "rb-audit-3345",
+            "escalation_channel": "#audit-quality",
+            "sla": "PT30M",
+            "evidence_hash": "sha256:trace-audit-3345",
+            "decision_flags": ["audit-defer", "windowed", "retain-marker"],
         }
     return {
         "action": "monitor",
@@ -220,6 +265,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         "retry_after_minutes": "15",
         "status": "watching",
         "marker": event.get("trace_id", ""),
+        "queue": "triage-watch",
+        "runbook": "rb-triage-default",
+        "escalation_channel": "#triage",
+        "sla": "PT15M",
+        "evidence_hash": "sha256:default-monitor",
+        "decision_flags": ["default", "non-active"],
     }
 ''',
                 encoding="utf-8",

@@ -29,6 +29,15 @@ CONFLICT_EXPECTED_VALUES = {
     "audit-war-room": "escalation channel",
     "iad-7": "primary region",
     "pdx-2": "secondary region",
+    "cp-orion-7": "control plane",
+    "ccdl-2026.08.17": "contract version",
+    "fp-9ab4c2-771": "dataset fingerprint",
+    "audit.q4.retention": "routing key",
+    "policy.compress.42": "routing key",
+    "marker.keep.9173": "routing key",
+    "sha256:ccdl-core-9173": "evidence checksum",
+    "sha256:hotfix-42-w33": "evidence checksum",
+    "sha256:delta-final-771": "evidence checksum",
     "contract-lock": "audit tag",
     "manual-review": "audit tag",
     "q4-retention": "audit tag",
@@ -36,6 +45,21 @@ CONFLICT_EXPECTED_VALUES = {
     "marker-retention": "validation gate",
     "audit-platform": "owner chain",
     "release-ops": "owner chain",
+    "rfc-4172": "approval chain",
+    "sec-1180": "approval chain",
+    "ops-9301": "approval chain",
+    "freeze-schema": "runbook step",
+    "notify-context-quality": "runbook step",
+    "verify-marker-retention": "runbook step",
+    "publish-war-room-note": "runbook step",
+    "legacy-policy-loader": "watchlist",
+    "summary-shadow-renderer": "watchlist",
+    "owner-ack-cron": "watchlist",
+    "#audit-war-room": "notification channel",
+    "#context-quality": "notification channel",
+    "2026-08-14T09:00Z": "deadline",
+    "2026-08-15T12:00Z": "deadline",
+    "2026-08-16T18:00Z": "deadline",
 }
 CONFLICT_FORBIDDEN_VALUES = (
     "OBSOLETE_MARKER",
@@ -49,6 +73,11 @@ CONFLICT_FORBIDDEN_VALUES = (
     "candidate-ready",
     "candidate-contract-carried",
     "pending-post-lock-review",
+    "cp-candidate-3",
+    "ccdl-2026.08-candidate",
+    "fp-candidate-1107",
+    "candidate-rfc-1107",
+    "candidate-policy-loader",
 )
 
 TRACE_EXPECTED_VALUES = {
@@ -66,6 +95,24 @@ TRACE_EXPECTED_VALUES = {
     "blocked-on-ledger-review": "status",
     "blocked-on-integrity-check": "status",
     "deferred-for-audit-window": "status",
+    "ledger-manual-review": "queue",
+    "ledger-quarantine": "queue",
+    "audit-defer": "queue",
+    "rb-ledger-9173": "runbook",
+    "rb-ledger-7712": "runbook",
+    "rb-audit-3345": "runbook",
+    "#ledger-quality": "escalation channel",
+    "#ledger-integrity": "escalation channel",
+    "#audit-quality": "escalation channel",
+    "PT0M": "sla",
+    "PT30M": "sla",
+    "sha256:trace-keep-4821": "evidence hash",
+    "sha256:trace-quarantine-7712": "evidence hash",
+    "sha256:trace-audit-3345": "evidence hash",
+    "retain-marker": "decision flag",
+    "block-ledger": "decision flag",
+    "checksum": "decision flag",
+    "windowed": "decision flag",
 }
 TRACE_FORBIDDEN_VALUES = (
     "retry-later",
@@ -78,6 +125,9 @@ TRACE_FORBIDDEN_VALUES = (
     "E-RETRY-CANDIDATE",
     "triage-desk",
     "candidate-retry",
+    "candidate-retry-queue",
+    "rb-candidate-retry",
+    "sha256:candidate-triage",
 )
 
 
@@ -142,6 +192,15 @@ for key, value in expected.items():
 assert report["summary"].startswith("compress-tool-preserved")
 assert "KEEP-COMPRESS-TOOL-9173" in report["summary"]
 assert report["regions"] == {"primary": "iad-7", "secondary": "pdx-2"}
+assert report["control_plane"] == "cp-orion-7"
+assert report["contract_version"] == "ccdl-2026.08.17"
+assert report["dataset_fingerprint"] == "fp-9ab4c2-771"
+assert report["routing_keys"] == ["audit.q4.retention", "policy.compress.42", "marker.keep.9173"]
+assert report["evidence_checksums"] == {
+    "core": "sha256:ccdl-core-9173",
+    "override": "sha256:hotfix-42-w33",
+    "delta": "sha256:delta-final-771",
+}
 assert report["audit_tags"] == ["contract-lock", "manual-review", "q4-retention"]
 assert report["validation_gates"] == [
     "schema-freeze",
@@ -150,6 +209,24 @@ assert report["validation_gates"] == [
     "summary-prefix",
 ]
 assert report["owner_chain"] == ["context-quality", "audit-platform", "release-ops"]
+assert report["approval_chain"] == ["rfc-4172", "sec-1180", "ops-9301"]
+assert report["runbook_steps"] == [
+    "freeze-schema",
+    "notify-context-quality",
+    "verify-marker-retention",
+    "publish-war-room-note",
+]
+assert report["watchlist"] == [
+    "legacy-policy-loader",
+    "summary-shadow-renderer",
+    "owner-ack-cron",
+]
+assert report["notification_channels"] == ["#audit-war-room", "#context-quality"]
+assert report["deadline_matrix"] == {
+    "owner_ack": "2026-08-14T09:00Z",
+    "schema_freeze": "2026-08-15T12:00Z",
+    "release_gate": "2026-08-16T18:00Z",
+}
 assert report["blocking_conditions"] == [
     "missing-owner-ack",
     "marker-mismatch",
@@ -215,6 +292,12 @@ assert confirmed == {
     "retry_after_minutes": "0",
     "status": "blocked-on-ledger-review",
     "marker": "TRACE-KEEP-4821",
+    "queue": "ledger-manual-review",
+    "runbook": "rb-ledger-9173",
+    "escalation_channel": "#ledger-quality",
+    "sla": "PT0M",
+    "evidence_hash": "sha256:trace-keep-4821",
+    "decision_flags": ["manual-review", "retain-marker", "block-ledger"],
 }
 
 quarantine = build_reconciliation_plan({
@@ -231,6 +314,12 @@ assert quarantine == {
     "retry_after_minutes": "0",
     "status": "blocked-on-integrity-check",
     "marker": "TRACE-QUARANTINE-7712",
+    "queue": "ledger-quarantine",
+    "runbook": "rb-ledger-7712",
+    "escalation_channel": "#ledger-integrity",
+    "sla": "PT0M",
+    "evidence_hash": "sha256:trace-quarantine-7712",
+    "decision_flags": ["quarantine", "checksum", "block-ledger"],
 }
 
 audit = build_reconciliation_plan({
@@ -247,6 +336,12 @@ assert audit == {
     "retry_after_minutes": "30",
     "status": "deferred-for-audit-window",
     "marker": "TRACE-AUDIT-3345",
+    "queue": "audit-defer",
+    "runbook": "rb-audit-3345",
+    "escalation_channel": "#audit-quality",
+    "sla": "PT30M",
+    "evidence_hash": "sha256:trace-audit-3345",
+    "decision_flags": ["audit-defer", "windowed", "retain-marker"],
 }
 
 other = build_reconciliation_plan({

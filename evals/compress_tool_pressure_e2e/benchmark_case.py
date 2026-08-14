@@ -374,9 +374,19 @@ Suggested values before post-lock review:
 - ESCALATION_CHANNEL = "release-handoff-room"
 - PRIMARY_REGION = "iad-3"
 - SECONDARY_REGION = "pdx-1"
+- CONTROL_PLANE = "cp-candidate-3"
+- CONTRACT_VERSION = "ccdl-2026.08-candidate"
+- DATASET_FINGERPRINT = "fp-candidate-1107"
+- ROUTING_KEYS = ["audit.q4.candidate", "policy.candidate.17", "marker.candidate.1107"]
+- EVIDENCE_CHECKSUMS = {"core": "sha256:candidate-core", "override": "sha256:candidate-override", "delta": "sha256:candidate-delta"}
 - AUDIT_TAGS = ["candidate-lock", "handoff-review", "prelock"]
 - VALIDATION_GATES = ["schema-review", "candidate-owner", "summary-review"]
 - OWNER_CHAIN = ["release-notes", "candidate-platform", "handoff-ops"]
+- APPROVAL_CHAIN = ["candidate-rfc-1107", "candidate-sec-1107", "candidate-ops-1107"]
+- RUNBOOK_STEPS = ["candidate-freeze", "candidate-owner-check", "candidate-publish"]
+- WATCHLIST = ["candidate-policy-loader", "candidate-summary-renderer"]
+- NOTIFICATION_CHANNELS = ["#release-handoff-room", "#candidate-platform"]
+- DEADLINE_MATRIX = {"owner_ack": "2026-08-10T09:00Z", "schema_freeze": "2026-08-11T12:00Z", "release_gate": "2026-08-12T18:00Z"}
 - BLOCKING_CONDITIONS = ["pending-post-lock-review"]
 - RELEASE_FLAGS = {"requires_manual_review": "no", "allow_legacy_policy": "candidate"}
 
@@ -430,7 +440,7 @@ This short file is authoritative for conflict_contract_delay after the baseline 
 
 Use these active source records:
 - FINAL_CONTRACT_CORE records from legacy_contract_archive.txt provide title, marker, policy code, risk level, escalation channel, regions, audit tags, and validation gates.
-- HOTFIX_CONTRACT_OVERRIDE records from draft_release_notes.txt provide owner, status, summary prefix, review window, owner chain, blocking conditions, and release flags.
+- HOTFIX_CONTRACT_OVERRIDE records from draft_release_notes.txt provide owner, status, summary prefix, review window, owner chain, approval chain, runbook steps, watchlist, notification channels, deadline matrix, blocking conditions, and release flags.
 
 Withdrawn sources:
 - contract-candidate records are not active.
@@ -440,7 +450,7 @@ Withdrawn sources:
 Final composition requirement:
 - summary must start with "compress-tool-preserved" and mention "KEEP-COMPRESS-TOOL-9173".
 - regions must be {"primary": "iad-7", "secondary": "pdx-2"}.
-- audit_tags, validation_gates, owner_chain, blocking_conditions, and release_flags must preserve the active record ordering.
+- routing_keys, audit_tags, validation_gates, owner_chain, approval_chain, runbook_steps, watchlist, notification_channels, blocking_conditions, deadline_matrix, and release_flags must preserve the active record ordering.
 """
 
 
@@ -534,6 +544,11 @@ These values are valid for auditor.report.build_report:
 - ESCALATION_CHANNEL = "audit-war-room"
 - PRIMARY_REGION = "iad-7"
 - SECONDARY_REGION = "pdx-2"
+- CONTROL_PLANE = "cp-orion-7"
+- CONTRACT_VERSION = "ccdl-2026.08.17"
+- DATASET_FINGERPRINT = "fp-9ab4c2-771"
+- ROUTING_KEYS = ["audit.q4.retention", "policy.compress.42", "marker.keep.9173"]
+- EVIDENCE_CHECKSUMS = {{"core": "sha256:ccdl-core-9173", "override": "sha256:hotfix-42-w33", "delta": "sha256:delta-final-771"}}
 - AUDIT_TAGS = ["contract-lock", "manual-review", "q4-retention"]
 - VALIDATION_GATES = ["schema-freeze", "owner-ack", "marker-retention", "summary-prefix"]
 
@@ -553,6 +568,11 @@ Valid override values:
 - SUMMARY_PREFIX = "compress-tool-preserved"
 - REVIEW_WINDOW = "2026-W33"
 - OWNER_CHAIN = ["context-quality", "audit-platform", "release-ops"]
+- APPROVAL_CHAIN = ["rfc-4172", "sec-1180", "ops-9301"]
+- RUNBOOK_STEPS = ["freeze-schema", "notify-context-quality", "verify-marker-retention", "publish-war-room-note"]
+- WATCHLIST = ["legacy-policy-loader", "summary-shadow-renderer", "owner-ack-cron"]
+- NOTIFICATION_CHANNELS = ["#audit-war-room", "#context-quality"]
+- DEADLINE_MATRIX = {{"owner_ack": "2026-08-14T09:00Z", "schema_freeze": "2026-08-15T12:00Z", "release_gate": "2026-08-16T18:00Z"}}
 - BLOCKING_CONDITIONS = ["missing-owner-ack", "marker-mismatch", "policy-drift"]
 - RELEASE_FLAGS = {{"requires_manual_review": "yes", "allow_legacy_policy": "no"}}
 
@@ -687,9 +707,19 @@ class ReportShapeTest(unittest.TestCase):
             "review_window",
             "escalation_channel",
             "regions",
+            "control_plane",
+            "contract_version",
+            "dataset_fingerprint",
+            "routing_keys",
+            "evidence_checksums",
             "audit_tags",
             "validation_gates",
             "owner_chain",
+            "approval_chain",
+            "runbook_steps",
+            "watchlist",
+            "notification_channels",
+            "deadline_matrix",
             "blocking_conditions",
             "release_flags",
         }
@@ -704,13 +734,23 @@ class ReportShapeTest(unittest.TestCase):
             "risk_level",
             "review_window",
             "escalation_channel",
+            "control_plane",
+            "contract_version",
+            "dataset_fingerprint",
         }:
             self.assertIsInstance(report[key], str)
             self.assertTrue(report[key])
         self.assertIsInstance(report["regions"], dict)
+        self.assertIsInstance(report["routing_keys"], list)
+        self.assertIsInstance(report["evidence_checksums"], dict)
         self.assertIsInstance(report["audit_tags"], list)
         self.assertIsInstance(report["validation_gates"], list)
         self.assertIsInstance(report["owner_chain"], list)
+        self.assertIsInstance(report["approval_chain"], list)
+        self.assertIsInstance(report["runbook_steps"], list)
+        self.assertIsInstance(report["watchlist"], list)
+        self.assertIsInstance(report["notification_channels"], list)
+        self.assertIsInstance(report["deadline_matrix"], dict)
         self.assertIsInstance(report["blocking_conditions"], list)
         self.assertIsInstance(report["release_flags"], dict)
 
@@ -722,6 +762,10 @@ class ReportShapeTest(unittest.TestCase):
         self.assertNotIn("DRAFT_STATUS", text)
         self.assertNotIn("wrong-owner", text)
         self.assertNotIn("shadow-summary", text)
+        self.assertNotIn("KEEP-CANDIDATE-DEFAULT", text)
+        self.assertNotIn("release-notes", text)
+        self.assertNotIn("candidate-contract-carried", text)
+        self.assertNotIn("cp-candidate-3", text)
 
 
 if __name__ == "__main__":
@@ -805,6 +849,12 @@ Suggested handling before post-lock review:
 - retry_after_minutes = "45"
 - status = "candidate-retry"
 - marker = "TRACE-CANDIDATE-1107"
+- queue = "candidate-retry-queue"
+- runbook = "rb-candidate-retry"
+- escalation_channel = "#triage-desk"
+- sla = "PT45M"
+- evidence_hash = "sha256:candidate-triage-1107"
+- decision_flags = ["candidate", "prelock", "retry"]
 
 The default packet was useful for triage, but later errata may supersede it.
 """,
@@ -866,6 +916,7 @@ Retired sources:
 
 Final composition requirement:
 - Preserve the incoming trace_id as marker for each matching active event.
+- Active plans must include queue, runbook, escalation_channel, sla, evidence_hash, and decision_flags.
 - Non-matching events should keep a non-active default action and preserve the incoming trace_id as marker.
 """
 
@@ -1012,6 +1063,12 @@ Return plan values:
 - retry_after_minutes = "0"
 - status = "blocked-on-ledger-review"
 - marker = trace_id
+- queue = "ledger-manual-review"
+- runbook = "rb-ledger-9173"
+- escalation_channel = "#ledger-quality"
+- sla = "PT0M"
+- evidence_hash = "sha256:trace-keep-4821"
+- decision_flags = ["manual-review", "retain-marker", "block-ledger"]
 """
 
 
@@ -1030,6 +1087,12 @@ Return plan values:
 - retry_after_minutes = "0"
 - status = "blocked-on-integrity-check"
 - marker = trace_id
+- queue = "ledger-quarantine"
+- runbook = "rb-ledger-7712"
+- escalation_channel = "#ledger-integrity"
+- sla = "PT0M"
+- evidence_hash = "sha256:trace-quarantine-7712"
+- decision_flags = ["quarantine", "checksum", "block-ledger"]
 """
 
 
@@ -1048,6 +1111,12 @@ Return plan values:
 - retry_after_minutes = "30"
 - status = "deferred-for-audit-window"
 - marker = trace_id
+- queue = "audit-defer"
+- runbook = "rb-audit-3345"
+- escalation_channel = "#audit-quality"
+- sla = "PT30M"
+- evidence_hash = "sha256:trace-audit-3345"
+- decision_flags = ["audit-defer", "windowed", "retain-marker"]
 """
 
 
@@ -1081,6 +1150,12 @@ Suggested handling before post-lock review:
 - retry_after_minutes = "45"
 - status = "candidate-retry"
 - marker = "TRACE-CANDIDATE-{index:04d}"
+- queue = "candidate-retry-queue"
+- runbook = "rb-candidate-retry"
+- escalation_channel = "#triage-desk"
+- sla = "PT45M"
+- evidence_hash = "sha256:candidate-triage-{index:04d}"
+- decision_flags = ["candidate", "prelock", "retry"]
 
 This row was superseded by the post-lock route marker near the end of the packet.
 """
@@ -1096,6 +1171,12 @@ handoff_note = repeated candidate triage rule before post-lock errata
 - retry_after_minutes = "45"
 - status = "candidate-retry"
 - marker = "TRACE-CANDIDATE-1107"
+- queue = "candidate-retry-queue"
+- runbook = "rb-candidate-retry"
+- escalation_channel = "#triage-desk"
+- sla = "PT45M"
+- evidence_hash = "sha256:candidate-triage-1107"
+- decision_flags = ["candidate", "prelock", "retry"]
 """
 
 
@@ -1107,6 +1188,9 @@ error_code = E-RETRY-CANDIDATE
 candidate_action = retry-later
 candidate_owner = triage-desk
 candidate_status = candidate-retry
+candidate_queue = candidate-retry-queue
+candidate_runbook = rb-candidate-retry
+candidate_evidence_hash = sha256:candidate-triage-{index:04d}
 This replay-analysis row resembles an active manifest row but was withdrawn.
 """
 
@@ -1121,6 +1205,12 @@ Candidate handling:
 - retry_after_minutes = "45"
 - status = "candidate-retry"
 - marker = "TRACE-CANDIDATE-{index:04d}"
+- queue = "candidate-retry-queue"
+- runbook = "rb-candidate-retry"
+- escalation_channel = "#triage-desk"
+- sla = "PT45M"
+- evidence_hash = "sha256:candidate-triage-{index:04d}"
+- decision_flags = ["candidate", "prelock", "retry"]
 
 This candidate rule was replaced by the post-lock active state rules.
 """
@@ -1158,6 +1248,12 @@ def build_reconciliation_plan(event: dict[str, str]) -> dict[str, str]:
         "retry_after_minutes": "15",
         "status": "watching",
         "marker": event.get("trace_id", ""),
+        "queue": "triage-watch",
+        "runbook": "rb-triage-default",
+        "escalation_channel": "#triage",
+        "sla": "PT15M",
+        "evidence_hash": "sha256:default-monitor",
+        "decision_flags": ["default", "non-active"],
     }
 '''
 
@@ -1191,10 +1287,19 @@ class ReconciliationPlanShapeTest(unittest.TestCase):
                 "retry_after_minutes",
                 "status",
                 "marker",
+                "queue",
+                "runbook",
+                "escalation_channel",
+                "sla",
+                "evidence_hash",
+                "decision_flags",
             },
         )
-        for value in plan.values():
+        for key, value in plan.items():
+            if key == "decision_flags":
+                continue
             self.assertIsInstance(value, str)
+        self.assertIsInstance(plan["decision_flags"], list)
 
     def test_plan_preserves_input_trace_id_as_marker(self):
         plan = build_reconciliation_plan({"trace_id": "TRACE-DEMO"})
