@@ -1,212 +1,308 @@
 # codingAgent
 
-一个学习型 coding agent 原型。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-## 第一版：终端聊天
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Runtime dependencies](https://img.shields.io/badge/runtime_dependencies-0-2ea44f)
+![API](https://img.shields.io/badge/API-OpenAI--compatible-412991)
+![Status](https://img.shields.io/badge/status-learning_project-orange)
 
-已实现最小聊天闭环：
+> A dependency-free, learning-oriented coding agent built from first principles in Python.
 
-- 从项目级 `.env` 和环境变量读取运行配置；
-- 非流式调用模型；
-- 对话历史只保存在当前进程内存里；
-- 使用一个 OpenAI-compatible Chat Completions 风格接口。
+`codingAgent` is a small but complete terminal coding agent. It implements the essential agent loop, native tool calling, workspace-safe file operations, context compression, logging, session recording, and real-LLM evaluations without relying on an agent framework.
 
-## 第二版：原生 tool calling + 文件工具
+This repository makes the mechanics of a coding agent visible and understandable. It is a learning project rather than a production-ready framework.
 
-当前 CLI 已开始从 chat bot 向 coding agent 过渡：
+## Highlights
 
-- 每次请求都会把 `read_file`、`grep` 和 `apply_patch` 作为 Chat Completions 原生 tool 传给模型；
-- 如果模型返回 `tool_calls`，CLI 会在本地执行对应工具；
-- 工具结果用 `role=tool`、`tool_call_id=...`、`content=<普通字符串>` 回填到 `messages`；
-- CLI 会继续调用模型，直到模型返回普通 assistant 文本；
-- 当前工具支持读取、检索或通过 git diff patch 修改当前工作区内的 UTF-8 文本文件；
-- 默认拒绝读取、检索或修改 `.env`、`.git/`、`.venv/`、`.ai_job/`、`__pycache__/` 等受保护路径。
-- 请求 LLM 和后台执行工具期间会关闭终端输入回显，并丢弃这段时间内误输入的内容；仅在需要用户确认时临时恢复输入回显。
-- 每轮 agent loop 都会写入运行日志；每次 CLI 启动生成一个独立日志文件，`FILTER_TERMINAL_LOG_LEVEL` 默认按 `debug` 处理，会同步把全部等级日志打印到终端。
-- 每次启动 CLI 后会异步清理过期运行日志：文件名里的会话开始时间超过一个自然月的 `log-YYYYMMDD-HHMMSS-mmm.log` 文件会被删除。
-- 每次 CLI 启动还会生成一个独立 Markdown 会话记录文件；会话记录不读取 `FILTER_TERMINAL_LOG_LEVEL`，只直接写入 `sessions/`。
-- 每次启动 CLI 后会异步清理过期会话记录：文件名里的会话开始时间超过一个自然月的 `sessions-YYYYMMDD-HHMMSS-mmm.md` 文件会被删除。
-- 工具调用已拆出内部契约：`ToolCall`、`BaseTool`、`ToolRegistry`、`ToolExecutor`；工具执行结果统一为字符串，失败时返回 `Error: ...`；
-- 工具调用格式已拆出 `BaseToolCallAdapter` 契约，OpenAI-compatible tool schema 和 tool_call 转换收口在 `ai_job/tool_adapters/OpenAIToolCallAdapter`；
-- 内部消息格式已拆出到 `ai_job/communication/`：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolMessage`、`MessageHistory`；
-- 模型 provider 链路已拆出到 `ai_job/provider_adapters/`：`BaseChatModel.complete(...)` 返回内部 `AssistantMessage`，`OpenAIModel` 负责 OpenAI-compatible HTTP 请求和响应解析，并默认内置 `OpenAIToolCallAdapter`；
-- agent loop 已拆出到 `ai_job/agent/AgentRunner`，`chat_cli.py` 只负责 CLI 主循环、对象组装和终端输入输出。
-- 终端输入回显控制已独立到 `ai_job/terminal_input/` 包中，CLI 显式使用 `AllowInputEcho` 和 `SuppressInputEchoAndDiscard`。
-- 日志基础设施已独立到 `ai_job/infra/logging/` 包中，通用入口为 `LogWrapper.debug/info/warn/error(TAG, text)`。
-- 会话记录基础设施已独立到 `ai_job/infra/session_recording/` 包中，通用入口为 `SessionRecorder.record_session(...)`。
-- 环境读取基础设施已独立到 `ai_job/infra/env/` 包中，`EnvLoader` 负责读取 `.env` 和 shell 环境变量，并返回扁平的 `AppEnv`。
-- HTTP 请求基础设施已独立到 `ai_job/infra/http/` 包中，`OpenAIModel` 默认使用 `UrlLibHttpClient`，测试时可注入 fake `BaseHttpClient`。
+| Capability | What is implemented |
+| --- | --- |
+| Agent loop | Repeated model → tool → model execution with a configurable round limit |
+| Model integration | Non-streaming OpenAI-compatible Chat Completions adapter |
+| Native tool calling | Provider-independent tool contracts and OpenAI tool-call conversion |
+| Coding tools | `read_file`, `grep`, and multi-file `apply_patch` with full preflight validation |
+| Context management | Automatic conversation summarization and model-triggered tool-output compression |
+| Workspace safety | Path containment, protected-path rules, and preflight patch validation |
+| Observability | Per-run trace logs and structured Markdown session records |
+| Evaluation | Unit tests plus real-LLM long-context and compression A/B benchmarks |
+| Runtime | Python standard library only |
 
-当前工具定义：
+## Architecture
+
+```mermaid
+flowchart LR
+    User["User"] --> CLI["Terminal CLI"]
+    CLI --> State["MessageState"]
+    State --> Runner["AgentRunner"]
+
+    Runner --> Model["BaseChatModel"]
+    Model --> OpenAI["OpenAIModel"]
+    OpenAI --> API["OpenAI-compatible API"]
+
+    Runner --> Registry["ToolRegistry"]
+    Registry --> Executor["ToolExecutor"]
+    Executor --> Tools["read_file / grep / apply_patch / compress_tool"]
+    Tools --> Workspace["Workspace"]
+
+    Runner --> Compression["CompressionManager"]
+    Compression --> State
+
+    CLI --> Lifecycle["Session lifecycle"]
+    Lifecycle --> Logs["Trace logs"]
+    Lifecycle --> Records["Session records"]
+```
+
+The implementation separates domain contracts from infrastructure:
+
+- `AgentRunner` owns one user turn and is independent of the concrete provider.
+- Internal message classes normalize provider-specific request and response formats.
+- `BaseChatModel`, `BaseTool`, `BaseToolCallAdapter`, and `BaseHttpClient` define dependency boundaries.
+- `composition/` is the composition root that wires concrete implementations together.
+- Context planning and git-diff application are isolated from I/O so they can be tested directly.
+
+## How One Turn Works
+
+1. The CLI appends a `UserMessage` to the in-memory `MessageState`.
+2. `CompressionManager` checks the estimated active-context budget.
+3. `AgentRunner` sends model-visible messages and tool definitions to the model.
+4. If the model returns tool calls, `ToolExecutor` runs them locally.
+5. Tool results are appended as `ToolMessage` objects and returned to the model.
+6. The loop continues until the model returns a normal assistant response or reaches the configured round limit.
+
+## Quick Start
+
+### Requirements
+
+- Python 3.9+
+- An API that implements the OpenAI-compatible `/chat/completions` contract
+
+### Run from source
+
+```bash
+git clone https://github.com/Gai-shi/codingAgent.git
+cd codingAgent
+
+cat > .env <<'EOF'
+OPENAI_API_KEY="your-api-key"
+OPENAI_MODEL="your-model"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+EOF
+
+python3 -m ai_job --workspace /path/to/target/project
+```
+
+The repository-level `.env` file is loaded automatically. Existing shell environment variables take precedence over values in `.env`.
+
+### Optional editable installation
+
+```bash
+python3 -m pip install -e .
+ai-job --workspace /path/to/target/project
+```
+
+The default workspace is the directory from which the command is launched.
+
+### CLI controls
+
+| Input or flag | Behavior |
+| --- | --- |
+| `-w, --workspace PATH` | Set the workspace available to file tools |
+| `--disable-compress-tool` | Hide `compress_tool` for comparison evaluations |
+| `/context` | Print the current model-visible message history |
+| `exit`, `quit`, `et`, `Ctrl-D` | Exit the CLI |
+
+## Configuration
+
+| Environment variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | Yes | — | Bearer token sent to the model API |
+| `OPENAI_MODEL` | Yes | — | Model name |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `AI_JOB_TIMEOUT_SECONDS` | No | `90` | HTTP request timeout |
+| `AI_JOB_MAX_TOOL_ROUNDS` | No | `8` | Maximum model/tool rounds per user turn |
+| `AI_JOB_CONTEXT_WINDOW` | No | Model registry or `800000` fallback | Explicit context-window override |
+| `AI_JOB_COMPACTION_RESERVE_TOKENS` | No | `16384` | Tokens reserved before automatic compression |
+| `AI_JOB_COMPACTION_KEEP_RECENT_TOKENS` | No | `20000` | Recent-context budget preserved during compression |
+| `AI_JOB_SYSTEM_PROMPT` | No | Built-in coding-agent prompt | Custom system instruction |
+| `FILTER_TERMINAL_LOG_LEVEL` | No | `debug` | Terminal filter: `debug`, `info`, `warn`, `error`, or `none` |
+| `AI_JOB_TRACE_LOG_PATH` | No | `.ai_job/logs/log.log` base path | Override the trace-log base path |
+| `AI_JOB_SESSION_RECORD_PATH` | No | `.ai_job/sessions/sessions.md` base path | Override the session-record base path |
+
+Numeric configuration values are validated at startup and must be positive.
+
+## Built-in Tools
+
+### `read_file`
+
+Reads a UTF-8 text file inside the workspace.
 
 ```text
 read_file(path: string) -> string
-grep(pattern: string, path?: string, type?: string, include_protected?: boolean) -> string
+```
+
+### `grep`
+
+Searches workspace text files using a Python regular expression.
+
+```text
+grep(
+  pattern: string,
+  path?: string,
+  type?: string,
+  include_protected?: boolean
+) -> string
+```
+
+- Supports an optional directory and file-extension filter.
+- Returns at most 50 matches.
+- Searching hidden or protected directories requires explicit interactive approval.
+
+### `apply_patch`
+
+Applies a supported subset of unified git diff patches.
+
+```text
 apply_patch(patch: string) -> string
 ```
 
-`grep` 使用 Python 正则表达式搜索文本文件：
+- Supports modifying, creating, and deleting UTF-8 text files.
+- Prechecks every affected file before writing anything.
+- Locates hunks by uniquely matching old content instead of trusting line numbers.
+- Rejects ambiguous matches, path escapes, renames, copies, binary patches, and quoted paths.
 
-- `pattern`：必填，正则表达式；
-- `path`：可选，限定工作区内的子目录，默认工作区根目录；
-- `type`：可选，按文件扩展名过滤，例如 `py`、`kt`、`md`；默认空字符串，表示搜索所有 UTF-8 文本文件；
-- `include_protected`：可选，默认 `false`。为 `true` 时表示请求检索隐藏目录或保护目录，CLI 会在本次工具执行前询问用户是否同意；
-- 输出最多返回 50 条匹配，每条格式为 `relative_path:line_number:line_text`。
+### `compress_tool`
 
-`apply_patch` 应用 git diff 子集：
+Replaces large earlier tool outputs in future model-visible context with concise, model-written replacements while retaining the original raw history for recording and debugging.
 
-- `patch`：必填，包含 `diff --git` 文件头和 unified hunk 的 git diff 文本；
-- 支持多文件修改、新增文件和删除文件；
-- 不支持 rename / copy / binary patch / quoted path；
-- 新增文件目标已存在时会报错，不允许覆盖；
-- hunk 定位学习 pi 的做法：用旧内容唯一匹配，不依赖模型数准行号；多处匹配会失败并提示候选行号；
-- 所有文件都会先完成路径校验、内容读取和内存 apply 预检查；任意预检查失败时不会写入任何文件。
+It is intended for outputs whose important facts are known. It should not replace diffs, stack traces, test failures, or other details that may still require exact inspection.
 
-### 工作区、运行日志与会话记录
+## Context Management
 
-`workspace` 是 agent 读、搜、改代码的边界：
+The project implements two complementary compression mechanisms.
 
-- 默认使用启动命令时的当前目录；
-- 也可以用 `--workspace` 显式指定；
-- `read_file`、`grep`、`apply_patch` 都只能操作 workspace 内的文件。
+### Automatic conversation compression
 
-例如让 agent 修另一个项目：
-
-```bash
-cd /path/to/target_project
-PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job
-```
-
-或：
-
-```bash
-PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
-```
-
-运行日志默认以这个基准路径派生按会话日志文件：
+Before each model request, the active context is estimated with a lightweight character-based token heuristic. When it crosses:
 
 ```text
-<ai_job 源码根目录>/.ai_job/logs/log-YYYYMMDD-HHMMSS-mmm.log
+context window - reserved tokens
 ```
 
-例如 2026-08-05 10:38:12.123 启动 CLI 时，日志会写入：
+the agent asks the configured model to summarize older messages while preserving a recent message window. The summary becomes the new visible context boundary; the raw message history remains available to the process and session recorder.
+
+### Tool-output compression
+
+The model can call `compress_tool` to replace verbose previous tool results with smaller context-visible representations. Compression calls are hidden from later model context after they succeed, avoiding self-generated bookkeeping noise.
+
+These mechanisms are deliberately separate: one controls conversation growth globally, while the other removes local tool-output bulk before global compaction becomes necessary.
+
+## Workspace Safety
+
+All file-oriented tools resolve paths against a single workspace root.
+
+- Paths that escape the workspace are rejected.
+- `.env`, `.git/`, `.venv/`, `.ai_job/`, and `__pycache__/` are protected.
+- `read_file` and `apply_patch` always reject protected paths.
+- `grep` skips protected paths by default and requires user approval for an explicit protected search.
+- Multi-file patches complete parsing, path validation, reads, and in-memory application before the first write.
+
+While the model or tools are busy, the CLI suppresses terminal echo and discards accidentally typed input. Echo is temporarily restored when user approval is required.
+
+## Logs and Session Records
+
+Each CLI run creates:
 
 ```text
-<ai_job 源码根目录>/.ai_job/logs/log-20260805-103812-123.log
+.ai_job/logs/log-YYYYMMDD-HHMMSS-mmm.log
+.ai_job/sessions/sessions-YYYYMMDD-HHMMSS-mmm.md
 ```
 
-这样即使 `--workspace` 指向不同目标项目，agent 运行日志仍会收口到 ai_job 项目根目录；同一次 CLI 启动期间，即使进程跨过 0 点，也会继续写入启动时创建的同一个日志文件。
+Trace logs capture agent rounds and tool execution. Session records capture the system message, user and assistant messages, tool calls, tool results, and exit snapshots. Matching records older than one calendar month are cleaned asynchronously.
 
-CLI 每次启动后还会开启一个 daemon 后台线程做过期日志清理，只删除 `.ai_job/logs/` 下匹配 `log-YYYYMMDD-HHMMSS-mmm.log` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
+Session files are observability artifacts; they are not yet used to resume a previous conversation.
 
-会话记录默认写入：
+## Project Structure
 
 ```text
-<ai_job 源码根目录>/.ai_job/sessions/sessions-YYYYMMDD-HHMMSS-mmm.md
+ai_job/
+├── agent/                 # Agent loop, visibility rules, token estimation
+├── communication/         # Provider-independent message model
+├── composition/           # Runtime object assembly
+├── compress/              # Automatic context-compression planning
+├── infra/
+│   ├── env/               # Typed environment loading
+│   ├── http/              # Injectable HTTP client
+│   ├── logging/           # Trace logging
+│   └── session_recording/ # Markdown session records
+├── provider_adapters/     # Chat-model contracts and OpenAI adapter
+├── terminal_input/        # Terminal echo modes
+├── tool_adapters/         # Provider tool-call conversion
+└── tools/                 # Tool contracts and built-in tools
+
+evals/                     # Real-LLM evaluation suites
+tests/                     # Unit and integration tests
 ```
 
-会话记录与运行日志使用同一个 CLI 启动时间命名。例如 2026-08-05 10:38:12.123 启动 CLI 时，会话记录会写入：
-
-```text
-<ai_job 源码根目录>/.ai_job/sessions/sessions-20260805-103812-123.md
-```
-
-会话记录当前记录主链路内容：`SystemMessage`、`UserMessage`、`AssistantMessage`、`ToolCall`、`ToolResult`。它不读取 `FILTER_TERMINAL_LOG_LEVEL`，也不打印到终端。CLI 每次启动后还会开启一个 daemon 后台线程清理 `.ai_job/sessions/` 下匹配 `sessions-YYYYMMDD-HHMMSS-mmm.md` 命名规则、且文件名里的会话开始时间早于“当前时间的前一个自然月”的文件；不匹配这个命名规则的文件不会被清理。
-
-当前通过 `LogWrapper.debug("trace", text)` 记录两类最小事件：
-
-```text
-2026-08-03T20:10:00 DEBUG [trace] round=<轮次>
-2026-08-03T20:10:01 DEBUG [trace] round=<轮次> tool_call=<当前序号>/<总数> tool=<工具名> path=<路径，如有>
-```
-
-无论 `FILTER_TERMINAL_LOG_LEVEL` 取值如何，日志都会写入日志文件。
-`FILTER_TERMINAL_LOG_LEVEL` 未设置时默认等价于 `debug`，会同时打印全部等级日志到终端。
-终端只输出等级大于等于当前过滤等级的日志，等级顺序为：
-
-```text
-debug < info < warn < error < none
-```
-
-对应行为：
-
-```text
-debug: debug / info / warn / error
-info : info / warn / error
-warn : warn / error
-error: error
-none : 不输出任何日志到终端
-```
-
-如果希望只写日志、不打印到终端：
+## Testing
 
 ```bash
-export FILTER_TERMINAL_LOG_LEVEL=none
+python3 -m unittest discover -s tests -v
 ```
 
-### 当前进度
+The tests cover the agent loop, tool contracts, file safety, patch parsing/application, provider adapters, HTTP behavior, context planning, compression, CLI composition, logging, terminal modes, and session lifecycle.
 
-已验证当前 CLI 可以通过本机 ModelHub 代理完成一次多轮聊天：
+## Real-LLM Evaluations
 
-- `OPENAI_BASE_URL=http://127.0.0.1:8787/v1`
-- `OPENAI_MODEL=gpt-5.5`
-- 当前代码实际请求 `http://127.0.0.1:8787/v1/chat/completions`
+The evaluation suites call real models rather than mocks. They can consume API credits and take substantially longer than unit tests.
 
-这里的 ModelHub 接入方式不是在项目内实现独立的 ModelHub provider，而是复用本机代理提供的
-OpenAI-compatible Chat Completions 接口。项目内部现在只依赖 Chat Completions 的：
+### Long-context retention
 
-- `messages`
-- `tools`
-- `assistant.tool_calls`
-- `role=tool` 工具结果消息
-
-### 环境变量
-
-启动时会自动读取 ai_job 源码根目录的 `.env` 文件；真实 shell 环境变量优先级更高，不会被 `.env` 覆盖。
-环境变量读取已集中在 `ai_job/infra/env/env_loader.py` 中，当前返回的运行配置对象为 `AppEnv`。
-
-`.env` 示例：
+`evals/context_compression_e2e/` builds a noisy multi-turn coding task whose final implementation depends on constraints introduced much earlier in the conversation.
 
 ```bash
-OPENAI_API_KEY="你的 API Key"
-OPENAI_MODEL="你的模型名"
-OPENAI_BASE_URL="https://api.openai.com/v1"
-AI_JOB_TIMEOUT_SECONDS="90"
-AI_JOB_MAX_TOOL_ROUNDS="8"
-AI_JOB_SYSTEM_PROMPT="You are a helpful coding agent. Use tools when you need workspace information."
-FILTER_TERMINAL_LOG_LEVEL="debug"
+python3 evals/context_compression_e2e/run_ai_job.py \
+  --output /tmp/ai_job_context_e2e \
+  --force
 ```
 
-如果使用本机 ModelHub 代理，可以把 `.env` 改成：
+### `compress_tool` A/B pressure suite
+
+`evals/compress_tool_pressure_e2e/` compares the same natural coding tasks with `compress_tool` enabled and disabled across multiple pressure levels and prompting policies.
 
 ```bash
-OPENAI_API_KEY="任意非空占位值"
-OPENAI_BASE_URL="http://127.0.0.1:8787/v1"
-OPENAI_MODEL="gpt-5.5"
+python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
+  --output /tmp/ai_job_compress_tool_ab \
+  --force \
+  --pressure smoke
 ```
 
-当前 `.env` loader 支持空行、`#` 注释行、`KEY=VALUE`、`export KEY=VALUE`，以及单引号/双引号包裹的值。`.env` 已被 `.gitignore` 忽略；不要把真实密钥写入代码或提交到仓库。
+Each suite includes an external grader, so the result measures final repository correctness rather than whether the model merely produced a plausible response.
 
-### 启动
+## Design Principles
 
-推荐从包入口启动：
+- **Make the loop explicit.** Core agent behavior should be readable without framework indirection.
+- **Depend on contracts.** Provider, HTTP, tool, and protocol-specific behavior sit behind small interfaces.
+- **Keep internal state provider-independent.** OpenAI request shapes are adapters, not domain objects.
+- **Validate before side effects.** File operations reject unsafe or partially applicable changes before writing.
+- **Evaluate outcomes.** Long-context behavior is checked through generated repositories and external graders.
 
-```bash
-python3 -m ai_job
-```
+## Known Limitations
 
-默认 workspace 是当前目录；如果要在任意目录启动并指定目标项目：
+- Only the non-streaming Chat Completions flow is implemented.
+- The built-in provider adapter targets OpenAI-compatible tool-calling semantics.
+- Conversation state lives in memory; session records cannot yet be resumed.
+- Token counting uses a `characters / 4` estimate rather than a model tokenizer.
+- `apply_patch` intentionally supports only a constrained git-diff subset.
+- There is no sandbox beyond workspace path policy; tools execute in the local process.
 
-```bash
-PYTHONPATH=/Users/bytedance/Documents/AI_Projects/ai_job python3 -m ai_job --workspace /path/to/target_project
-```
+## Repository Intent
 
-旧入口仍可使用：
+The primary goal is to learn how coding agents work by implementing their essential parts directly: context engineering, agent loops, tool contracts, compression, evaluation, and object-oriented dependency boundaries.
 
-```bash
-python3 -m ai_job.chat_cli --workspace /path/to/target_project
-```
+For an engineering review, the most relevant entry points are:
 
-输入 `/context` 可以查看当前进程内存里的 `messages`。
-
-输入 `exit` / `quit` / `et` / `Ctrl-D` 退出。
+- `ai_job/agent/agent_runner.py`
+- `ai_job/communication/messages.py`
+- `ai_job/tools/base_tool.py`
+- `ai_job/compress/context_compression.py`
+- `ai_job/composition/cli_factory.py`
