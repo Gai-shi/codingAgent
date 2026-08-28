@@ -25,7 +25,7 @@
 | 工作区安全 | 路径边界、保护路径和 patch 写入前完整校验 |
 | 可观测性 | 每次运行独立的 trace 日志和 Markdown 会话记录 |
 | 评测 | 单元测试，以及基于真实大模型的长上下文与压缩 A/B 评测 |
-| 运行时 | 仅使用 Python 标准库 |
+| 运行时 | 默认仅使用 Python 标准库；LangGraph runner 作为可选框架对照实现 |
 
 ## 架构
 
@@ -102,12 +102,24 @@ ai-job --workspace /path/to/target/project
 
 如果不传 `--workspace`，默认工作区是启动命令时的当前目录。
 
+### 可选：运行 LangGraph 对照 runner
+
+LangGraph runner 用于学习和对照主流 Agent 框架如何表达同一个模型-工具循环。默认 CLI 仍使用手写 `AgentRunner`。
+
+```bash
+python3 -m pip install -e '.[langgraph]'
+python3 -m ai_job --workspace /path/to/target/project --runner langgraph
+```
+
+该模式复用项目自己的消息状态、工具系统、上下文压缩和会话记录；LangGraph 只负责编排单个用户回合内的 `model -> tools -> model` 状态图。
+
 ### CLI 操作
 
 | 输入或参数 | 行为 |
 | --- | --- |
 | `-w, --workspace PATH` | 指定文件工具可访问的工作区 |
 | `--disable-compress-tool` | 隐藏 `compress_tool`，用于对比评测 |
+| `--runner native\|langgraph` | 选择手写 runner 或 LangGraph 对照 runner，默认 `native` |
 | `/context` | 打印当前模型可见的消息历史 |
 | `exit`、`quit`、`et`、`Ctrl-D` | 退出 CLI |
 
