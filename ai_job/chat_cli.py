@@ -62,6 +62,12 @@ def parse_cli_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="不注册 compress_tool，用于对比评测工具输出压缩的效果。",
     )
+    parser.add_argument(
+        "--runner",
+        choices=["native", "langgraph"],
+        default="native",
+        help="选择 agent runner 实现。默认 native；langgraph 需要安装可选依赖。",
+    )
     return parser.parse_args(argv)
 
 
@@ -146,6 +152,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         workspace_root=workspace_root,
         request_protected_grep_approval=create_protected_grep_approval(workspace_root),
         include_compress_tool=not args.disable_compress_tool,
+        runner_kind=args.runner,
     )
     message_state = runtime.message_state
     agent_runner = runtime.agent_runner
