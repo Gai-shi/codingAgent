@@ -10,13 +10,14 @@ from ..infra.logging import LogWrapper
 from ..infra.session_recording import SessionRecorder
 from ..provider_adapters import BaseChatModel
 from ..tools import ToolCall, ToolExecutionContext, ToolExecutor, ToolRegistry
+from .base_runner import BaseAgentRunner
 from .message_visibility import COMPRESS_TOOL_NAME, MessageVisibilityManager
 
 
 TRACE_TAG = "trace"
 
 
-class AgentRunner:
+class AgentRunner(BaseAgentRunner):
     """Run one user turn, including zero or more native tool-calling rounds."""
 
     def __init__(
