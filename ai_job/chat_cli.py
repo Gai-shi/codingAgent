@@ -139,6 +139,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             session_record_path=default_session_record_path(),
         )
         session_lifecycle.start(app_env=app_env, workspace_root=workspace_root)
+        runtime = create_cli_runtime(
+            app_env=app_env,
+            workspace_root=workspace_root,
+            request_protected_grep_approval=create_protected_grep_approval(workspace_root),
+            include_compress_tool=not args.disable_compress_tool,
+            runner_kind=args.runner,
+        )
     except ValueError as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         print(
@@ -147,13 +154,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 2
 
-    runtime = create_cli_runtime(
-        app_env=app_env,
-        workspace_root=workspace_root,
-        request_protected_grep_approval=create_protected_grep_approval(workspace_root),
-        include_compress_tool=not args.disable_compress_tool,
-        runner_kind=args.runner,
-    )
     message_state = runtime.message_state
     agent_runner = runtime.agent_runner
     session_lifecycle.record_initial_system_message(message_state)
