@@ -25,7 +25,7 @@ This repository makes the mechanics of a coding agent visible and understandable
 | Workspace safety | Path containment, protected-path rules, and preflight patch validation |
 | Observability | Per-run trace logs and structured Markdown session records |
 | Evaluation | Unit tests plus real-LLM long-context and compression A/B benchmarks |
-| Runtime | Python standard library only |
+| Runtime | Python standard library by default; LangGraph runner as an optional framework comparison |
 
 ## Architecture
 
@@ -102,12 +102,24 @@ ai-job --workspace /path/to/target/project
 
 The default workspace is the directory from which the command is launched.
 
+### Optional LangGraph comparison runner
+
+The LangGraph runner is a learning-oriented comparison path that expresses the same model-tool loop with a mainstream agent framework. The default CLI still uses the hand-written `AgentRunner`.
+
+```bash
+python3 -m pip install -e '.[langgraph]'
+python3 -m ai_job --workspace /path/to/target/project --runner langgraph
+```
+
+This mode reuses the project's own message state, tool system, context compression, and session recording. LangGraph only orchestrates the per-turn `model -> tools -> model` state graph.
+
 ### CLI controls
 
 | Input or flag | Behavior |
 | --- | --- |
 | `-w, --workspace PATH` | Set the workspace available to file tools |
 | `--disable-compress-tool` | Hide `compress_tool` for comparison evaluations |
+| `--runner native\|langgraph` | Select the hand-written runner or LangGraph comparison runner; defaults to `native` |
 | `/context` | Print the current model-visible message history |
 | `exit`, `quit`, `et`, `Ctrl-D` | Exit the CLI |
 
