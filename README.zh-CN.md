@@ -288,6 +288,16 @@ python3 evals/compress_tool_pressure_e2e/run_ai_job_ab.py \
   --pressure smoke
 ```
 
+### `native` vs `langgraph` runner 对照评测
+
+`evals/runner_comparison_e2e/` 会对同一批专用任务分别运行 `native` 和 `langgraph` runner，并汇总估算 token、正确率和端到端耗时差异。
+
+```bash
+.venv/bin/python -m evals.runner_comparison_e2e.run_ai_job_ab \
+  --output /tmp/ai_job_runner_comparison \
+  --force
+```
+
 每套评测都带有外部 grader，检查最终仓库是否满足约束，而不是只判断模型是否生成了一段看起来合理的回复。
 
 ## 设计原则
